@@ -89,13 +89,13 @@ class StrideGame {
     // 2. Scene & sunlit metropolitan haze
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#c9e0f5');
-    this.scene.fog = new THREE.FogExp2('#d2e5f7', 0.0029);
+    this.scene.fog = new THREE.FogExp2('#d2e5f7', 0.00155);
 
     this.camera = new THREE.PerspectiveCamera(
       this.settings.fov,
       window.innerWidth / window.innerHeight,
       0.1,
-      900
+      3200
     );
     this.scene.add(this.camera);
 

@@ -104,13 +104,14 @@ export class SkySystem {
       uTime: { value: 0 },
     };
 
-    const geo = new THREE.SphereGeometry(750, 20, 12);
+    const geo = new THREE.SphereGeometry(2800, 48, 28);
     const mat = new THREE.ShaderMaterial({
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
       uniforms: this.uniforms,
       side: THREE.BackSide,
       depthWrite: false,
+      depthTest: false,
       fog: false,
     });
 
@@ -190,9 +191,9 @@ export class SkySystem {
       const b = this.birds[i];
       const a = t * b.speed + b.phase;
       dummy.position.set(
-        b.centerX + Math.cos(a) * b.radius,
-        b.y + Math.sin(a * 2.0) * 1.2,
-        b.centerZ + Math.sin(a) * b.radius
+        cameraPos.x + b.centerX + Math.cos(a) * b.radius,
+        cameraPos.y + b.y + Math.sin(a * 2.0) * 1.2,
+        cameraPos.z + b.centerZ + Math.sin(a) * b.radius
       );
       dummy.rotation.set(0, -a, 0);
       dummy.updateMatrix();

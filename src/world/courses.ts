@@ -584,4 +584,76 @@ const COURSE_04: CourseDef = {
   ],
 };
 
-export const COURSES: CourseDef[] = [COURSE_01, COURSE_02, COURSE_03, COURSE_04];
+/** Scatter extra walkable rooftops around a course so you can web and land off-track. */
+function sprinklePlayground(course: CourseDef): CourseDef {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  let avgTop = 0;
+  let nRoof = 0;
+  for (const b of course.boxes) {
+    minX = Math.min(minX, b.x - b.w * 0.5);
+    maxX = Math.max(maxX, b.x + b.w * 0.5);
+    minZ = Math.min(minZ, b.z - b.d * 0.5);
+    maxZ = Math.max(maxZ, b.z + b.d * 0.5);
+    if (b.style === 'rooftop' && !b.noCollide) {
+      avgTop += b.y + b.h;
+      nRoof++;
+    }
+  }
+  const baseTop = nRoof > 0 ? avgTop / nRoof : 4;
+  const pad = 190;
+  let seed = course.id.charCodeAt(0) * 7919 + 77;
+  const rand = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+
+  const overlaps = (x: number, z: number, w: number, d: number) => {
+    const a0 = x - w * 0.5;
+    const a1 = x + w * 0.5;
+    const c0 = z - d * 0.5;
+    const c1 = z + d * 0.5;
+    for (const b of course.boxes) {
+      if (b.style === 'vault' || b.style === 'slide') continue;
+      if (
+        a1 > b.x - b.w * 0.5 - 6 &&
+        a0 < b.x + b.w * 0.5 + 6 &&
+        c1 > b.z - b.d * 0.5 - 6 &&
+        c0 < b.z + b.d * 0.5 + 6
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const extra: BoxDef[] = [];
+  for (let x = minX - pad; x <= maxX + pad; x += 38) {
+    for (let z = minZ - pad; z <= maxZ + pad; z += 38) {
+      const jx = x + (rand() - 0.5) * 10;
+      const jz = z + (rand() - 0.5) * 10;
+      const w = 16 + rand() * 18;
+      const d = 16 + rand() * 18;
+      if (overlaps(jx, jz, w, d)) continue;
+      const topY = baseTop + (rand() - 0.35) * 14;
+      extra.push(
+        roof(jx, Math.max(-2, topY), jz, w, d, {
+          cleanRoof: true,
+          label: rand() > 0.82 ? 'CITY' : undefined,
+        })
+      );
+    }
+  }
+  course.boxes.push(...extra);
+  if (course.killY > -80) course.killY = Math.min(course.killY, -28);
+  return course;
+}
+
+export const COURSES: CourseDef[] = [
+  sprinklePlayground(COURSE_01),
+  sprinklePlayground(COURSE_02),
+  sprinklePlayground(COURSE_03),
+  sprinklePlayground(COURSE_04),
+];

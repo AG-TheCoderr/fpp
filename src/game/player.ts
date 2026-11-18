@@ -363,7 +363,7 @@ export class Player {
     // Update best grapple lock candidate for HUD reticle
     const lockCandidate =
       this.state !== 'grapple' && this.grappleCooldown <= 0
-        ? this.world.findBestGrapple(
+        ? this.world.findAimSwing(
             this.x,
             eyeY,
             this.z,
@@ -1579,7 +1579,7 @@ export class Player {
     this.vy -= GRAVITY * 0.88 * dt;
 
     // Smooth reel + look + lateral A/D swing control!
-    this.grappleRopeLen = Math.max(4.8, this.grappleRopeLen - 3.6 * dt);
+    this.grappleRopeLen = Math.max(5.2, this.grappleRopeLen - 2.4 * dt);
     const [fx, fz] = this.getHorizForward();
     const [srx, srz] = this.getHorizRight();
     this.vx += (fx * 15.5 + srx * input.right * 11.0) * dt;
@@ -1600,8 +1600,8 @@ export class Player {
     }
 
     const tot = this.totalSpeed;
-    if (tot > 23.0) {
-      const s = 23.0 / tot;
+    if (tot > 28.0) {
+      const s = 28.0 / tot;
       this.vx *= s;
       this.vy *= s;
       this.vz *= s;
@@ -1629,17 +1629,12 @@ export class Player {
     this.vy = res.vy;
     this.vz = res.vz;
 
-    const hToA = toAx * fx + toAz * fz;
     const jumpedOut = input.jumpBufferTimer > 0 && this.grappleTimer > 0.08;
-    const releasedOut = !input.grappleHeld && this.grappleTimer > 0.22;
-    const passedApex =
-      this.grappleTimer > 0.25 &&
-      ((hToA < -5.8 && this.vy > 1.5) || dist < 4.2 || attachY > anchor.y + 1.2);
-    const timedOut = this.grappleTimer > 1.9;
+    const releasedOut = !input.grappleHeld && this.grappleTimer > 0.18;
 
-    if (jumpedOut || releasedOut || passedApex || timedOut || res.grounded) {
+    if (jumpedOut || releasedOut || res.grounded) {
       if (jumpedOut) input.jumpBufferTimer = 0;
-      const slingshot = !res.grounded && (jumpedOut || releasedOut || passedApex);
+      const slingshot = !res.grounded && (jumpedOut || releasedOut);
       if (slingshot) {
         this.vy = Math.max(this.vy + (jumpedOut ? 4.2 : 2.6), jumpedOut ? 9.5 : 7.4);
         this.vy = Math.min(this.vy, 13.4);
@@ -1655,7 +1650,7 @@ export class Player {
 
       this.lastGrappleId = anchor.id;
       this.activeGrapple = null;
-      this.grappleCooldown = 0.32;
+      this.grappleCooldown = 0.12;
       this.grounded = res.grounded;
       this.currentRamp = res.onRamp;
       this.landingGraceTimer = res.grounded ? 0.15 : 0;
