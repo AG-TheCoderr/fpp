@@ -19,6 +19,7 @@ import {
   saveSettings,
 } from './storage';
 import { CourseRecord, GameScreen, GraphicsQuality } from './types';
+import { registerServiceWorker, requestAppFullscreen } from './ui/display';
 import { GameUI } from './ui/hud';
 import { BuiltCourse } from './world/builder';
 import { COURSES } from './world/courses';
@@ -180,6 +181,11 @@ class StrideGame {
     this.applyGraphics(this.settings.graphics);
     this.loadCourse(0);
     this.ui.showTitle(0);
+    registerServiceWorker();
+
+    const enterFullscreen = () => requestAppFullscreen();
+    window.addEventListener('pointerdown', enterFullscreen, { capture: true });
+    window.addEventListener('keydown', enterFullscreen, { capture: true });
 
     window.addEventListener('resize', () => this.onResize());
     requestAnimationFrame((now) => this.loop(now));
