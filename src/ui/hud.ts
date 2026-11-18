@@ -454,6 +454,16 @@ export class GameUI {
             <span class="setting-val" id="v-fov">${Math.round(s.fov)}</span>
           </div>
           <div class="setting-row">
+            <span class="setting-label">MOTION BLUR</span>
+            <input class="setting-slider" id="s-blur" type="range" min="0" max="150" step="5" value="${Math.round(s.motionBlur * 100)}" />
+            <span class="setting-val" id="v-blur">${Math.round(s.motionBlur * 100)}%</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">HEAD BOB</span>
+            <input class="setting-slider" id="s-bob" type="range" min="0" max="150" step="5" value="${Math.round(s.headBob * 100)}" />
+            <span class="setting-val" id="v-bob">${Math.round(s.headBob * 100)}%</span>
+          </div>
+          <div class="setting-row">
             <span class="setting-label">AUDIO</span>
             <input class="setting-slider" id="s-vol" type="range" min="0" max="100" step="1" value="${Math.round(s.volume * 100)}" />
             <span class="setting-val" id="v-vol">${Math.round(s.volume * 100)}%</span>
@@ -481,6 +491,22 @@ export class GameUI {
     fovIn.addEventListener('input', () => {
       s.fov = Number(fovIn.value);
       fovVal.textContent = `${Math.round(s.fov)}`;
+      this.cb.onSettingsChange(s);
+    });
+
+    const blurIn = this.root.querySelector<HTMLInputElement>('#s-blur')!;
+    const blurVal = this.root.querySelector<HTMLElement>('#v-blur')!;
+    blurIn.addEventListener('input', () => {
+      s.motionBlur = Number(blurIn.value) / 100;
+      blurVal.textContent = `${Math.round(s.motionBlur * 100)}%`;
+      this.cb.onSettingsChange(s);
+    });
+
+    const bobIn = this.root.querySelector<HTMLInputElement>('#s-bob')!;
+    const bobVal = this.root.querySelector<HTMLElement>('#v-bob')!;
+    bobIn.addEventListener('input', () => {
+      s.headBob = Number(bobIn.value) / 100;
+      bobVal.textContent = `${Math.round(s.headBob * 100)}%`;
       this.cb.onSettingsChange(s);
     });
 

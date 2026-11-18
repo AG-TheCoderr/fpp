@@ -1,21 +1,19 @@
 /**
  * Procedural Web Audio synthesizer for STRIDE:
- * Concrete footsteps, wall-run taps, palm vaults, landing thuds, speed-scaled slide scrape,
- * speed-scaled rooftop wind rush, grapple latch/zip, turbine launch pad, and checkpoint/finish chimes.
+ * Left/right alternating concrete footsteps, rubber pivot scuffs, wall-run taps, palm vaults,
+ * landing thuds, carve/brake-modulated slide friction, velocity wind roar, grapple latch/zip,
+ * updraft launch turbine, and checkpoint/finish chimes.
  */
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
 
-  // Continuous ambient/speed wind loop
   private windGain: GainNode | null = null;
   private windFilter: BiquadFilterNode | null = null;
 
-  // Continuous concrete slide loop
   private slideGain: GainNode | null = null;
   private slideFilter: BiquadFilterNode | null = null;
-  private isSliding = false;
 
   private volume = 0.75;
 
@@ -50,7 +48,6 @@ export class AudioEngine {
     this.masterGain.gain.value = this.volume;
     this.masterGain.connect(ctx.destination);
 
-    // 2 seconds of smooth pink-ish filtered white noise for wind, scrape, breath & shoe grit
     const len = ctx.sampleRate * 2;
     this.noiseBuffer = ctx.createBuffer(1, len, ctx.sampleRate);
     const data = this.noiseBuffer.getChannelData(0);
@@ -65,7 +62,7 @@ export class AudioEngine {
       data[i] = Math.max(-1, Math.min(1, (b0 + b1 + b2 + white * 0.18) * 1.7));
     }
 
-    // Continuous rooftop wind rush
+    // Continuous velocity-coupled rooftop wind
     const windSrc = ctx.createBufferSource();
     windSrc.buffer = this.noiseBuffer;
     windSrc.loop = true;
@@ -80,14 +77,14 @@ export class AudioEngine {
     this.windGain.connect(this.masterGain);
     windSrc.start();
 
-    // Continuous slide friction scrape
+    // Continuous speed/carve/brake-modulated concrete slide scrape
     const slideSrc = ctx.createBufferSource();
     slideSrc.buffer = this.noiseBuffer;
     slideSrc.loop = true;
     this.slideFilter = ctx.createBiquadFilter();
     this.slideFilter.type = 'bandpass';
     this.slideFilter.frequency.value = 1450;
-    this.slideFilter.Q.value = 1.1;
+    this.slideFilter.Q.value = 1.15;
     this.slideGain = ctx.createGain();
     this.slideGain.gain.value = 0;
     slideSrc.connect(this.slideFilter);
@@ -96,7 +93,13 @@ export class AudioEngine {
     slideSrc.start();
   }
 
-  updateContinuous(totalSpeed: number, sliding: boolean, active: boolean): void {
+  updateContinuous(
+    totalSpeed: number,
+    sliding: boolean,
+    slideCarve = 0,
+    slideBraking = false,
+    active = true
+  ): void {
     if (!this.ctx || !this.windGain || !this.windFilter || !this.slideGain || !this.slideFilter) {
       return;
     }
@@ -109,38 +112,45 @@ export class AudioEngine {
       return;
     }
 
-    // Wind roar opens smoothly with velocity (signature Mirror's Edge high-altitude wind!)
-    const sNorm = Math.max(0, Math.min(1, (totalSpeed - 6) / 19));
-    const targetWindVol = 0.016 + sNorm * sNorm * 0.22;
-    const targetWindFreq = 240 + sNorm * 1150;
-    this.windGain.gain.setTargetAtTime(targetWindVol, now, 0.08);
-    this.windFilter.frequency.setTargetAtTime(targetWindFreq, now, 0.08);
+    // Rooftop wind opens quadratically with velocity
+    const sNorm = Math.max(0, Math.min(1, (totalSpeed - 6.5) / 19));
+    const targetWindVol = 0.015 + sNorm * sNorm * 0.23;
+    const targetWindFreq = 235 + sNorm * 1200;
+    this.windGain.gain.setTargetAtTime(targetWindVol, now, 0.07);
+    this.windFilter.frequency.setTargetAtTime(targetWindFreq, now, 0.07);
 
-    // Concrete slide hiss/scrape scales with sliding speed
-    this.isSliding = sliding;
-    if (sliding) {
-      const slideNorm = Math.max(0.2, Math.min(1, totalSpeed / 20));
-      this.slideGain.gain.setTargetAtTime(0.16 * slideNorm, now, 0.03);
-      this.slideFilter.frequency.setTargetAtTime(950 + slideNorm * 1100, now, 0.05);
+    // Tactile slide texture responds dynamically to speed, A/D edge carving, and S heel-braking!
+    if (sliding && totalSpeed > 1.0) {
+      const slideNorm = Math.max(0.15, Math.min(1.15, totalSpeed / 19));
+      const edgeBite = 1 + Math.abs(slideCarve) * 0.28 + (slideBraking ? 0.52 : 0);
+      const vol = Math.min(0.26, 0.15 * slideNorm * edgeBite);
+      const freq =
+        900 +
+        slideNorm * 1050 +
+        Math.abs(slideCarve) * 320 +
+        (slideBraking ? 520 : 0);
+      this.slideGain.gain.setTargetAtTime(vol, now, 0.028);
+      this.slideFilter.frequency.setTargetAtTime(freq, now, 0.04);
     } else {
-      this.slideGain.gain.setTargetAtTime(0, now, 0.04);
+      this.slideGain.gain.setTargetAtTime(0, now, 0.045);
     }
   }
 
-  playFootstep(speed: number, isWall: boolean): void {
+  playFootstep(speed: number, isWall: boolean, foot: -1 | 1 = 1): void {
     if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    const jitter = 0.9 + Math.random() * 0.22;
-    const vol = Math.min(0.22, (0.08 + (speed / 22) * 0.11) * (isWall ? 0.85 : 1.0));
+    // Subtle left/right acoustic asymmetry makes stride feel genuinely human
+    const footTint = foot < 0 ? 0.96 : 1.04;
+    const jitter = (0.93 + Math.random() * 0.14) * footTint;
+    const vol = Math.min(0.22, (0.075 + (speed / 22) * 0.115) * (isWall ? 0.85 : 1.0));
 
-    // Low concrete heel/sole thump
     const osc = ctx.createOscillator();
     const og = ctx.createGain();
     osc.type = 'triangle';
-    const baseF = (isWall ? 135 : 98) * jitter;
+    const baseF = (isWall ? 136 : 96) * jitter;
     osc.frequency.setValueAtTime(baseF, now);
-    osc.frequency.exponentialRampToValueAtTime(42, now + 0.055);
+    osc.frequency.exponentialRampToValueAtTime(40, now + 0.055);
     og.gain.setValueAtTime(vol, now);
     og.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
     osc.connect(og);
@@ -148,39 +158,43 @@ export class AudioEngine {
     osc.start(now);
     osc.stop(now + 0.065);
 
-    // Crisp sneaker-on-concrete grit transient
     this.playNoiseBurst(
-      isWall ? 1650 * jitter : 1250 * jitter,
+      isWall ? 1680 * jitter : 1260 * jitter,
       1.6,
       vol * 0.72,
       0.045
     );
   }
 
+  playPivot(intensity: number): void {
+    // Crisp rubber-sole concrete cut scuff on fast direction reversals!
+    const v = 0.07 + intensity * 0.09;
+    this.playNoiseBurst(1850, 2.2, v, 0.085);
+    this.playToneSweep(120, 48, 0.065, v * 0.85, 'triangle');
+  }
+
   playJump(boosted: boolean): void {
     if (!this.ctx || !this.masterGain) return;
-    // Crisp upward fabric/air whoosh
-    this.playNoiseBurst(boosted ? 900 : 620, 0.9, boosted ? 0.18 : 0.12, 0.14);
+    this.playNoiseBurst(boosted ? 920 : 620, 0.9, boosted ? 0.18 : 0.12, 0.14);
     if (boosted) {
-      this.playToneSweep(160, 320, 0.11, 0.08, 'sine');
+      this.playToneSweep(165, 330, 0.11, 0.08, 'sine');
     }
   }
 
   playLand(impact: number, intoSlide: boolean): void {
     if (!this.ctx || !this.masterGain) return;
     const strength = Math.max(0.15, Math.min(1, impact / 22));
-    const vol = (intoSlide ? 0.14 : 0.28) * strength;
+    const vol = (intoSlide ? 0.15 : 0.28) * strength;
     this.playToneSweep(105, 34, 0.11, vol, 'triangle');
     this.playNoiseBurst(780, 1.1, vol * 0.85, 0.09);
   }
 
-  playSlideStart(): void {
-    this.playNoiseBurst(1600, 0.8, 0.18, 0.12);
-    this.playToneSweep(140, 65, 0.1, 0.11, 'sine');
+  playSlideStart(slopeSlam = false): void {
+    this.playNoiseBurst(slopeSlam ? 1900 : 1600, 0.8, slopeSlam ? 0.24 : 0.18, 0.14);
+    this.playToneSweep(slopeSlam ? 175 : 140, 58, 0.12, slopeSlam ? 0.16 : 0.11, 'sine');
   }
 
   playVault(spring: boolean): void {
-    // Crisp gloved palm slap + cloth rush!
     this.playToneSweep(175, 62, 0.075, 0.2, 'triangle');
     this.playNoiseBurst(1100, 1.0, 0.17, 0.13);
     if (spring) {
@@ -206,7 +220,6 @@ export class AudioEngine {
 
   playGrappleAttach(): void {
     if (!this.ctx || !this.masterGain) return;
-    // Mechanical skyhook latch clack + taut rising steel cable zip!
     this.playToneSweep(920, 380, 0.045, 0.15, 'square');
     this.playToneSweep(280, 860, 0.18, 0.11, 'sawtooth', 1800);
     this.playNoiseBurst(2200, 1.8, 0.14, 0.12);
@@ -222,7 +235,6 @@ export class AudioEngine {
   }
 
   playLaunchPad(): void {
-    // Deep turbine updraft boom + rising harmonic rush!
     this.playToneSweep(95, 480, 0.34, 0.18, 'sine');
     this.playToneSweep(190, 720, 0.32, 0.09, 'triangle');
     this.playNoiseBurst(950, 0.6, 0.26, 0.36);
@@ -231,9 +243,8 @@ export class AudioEngine {
   playCheckpoint(aheadOfPb: boolean): void {
     if (!this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
-    // Clean minimal two-note glass chime
-    const f1 = aheadOfPb ? 659.25 : 587.33; // E5 or D5
-    const f2 = aheadOfPb ? 987.77 : 783.99; // B5 or G5
+    const f1 = aheadOfPb ? 659.25 : 587.33;
+    const f2 = aheadOfPb ? 987.77 : 783.99;
     this.playChimeNote(f1, now, 0.22, 0.12);
     this.playChimeNote(f2, now + 0.065, 0.32, 0.13);
   }
@@ -242,8 +253,8 @@ export class AudioEngine {
     if (!this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const chord = isNewBest
-      ? [523.25, 659.25, 783.99, 1046.5] // C5 E5 G5 C6
-      : [440.0, 554.37, 659.25, 880.0];  // A4 C#5 E5 A5
+      ? [523.25, 659.25, 783.99, 1046.5]
+      : [440.0, 554.37, 659.25, 880.0];
     chord.forEach((f, i) => {
       this.playChimeNote(f, now + i * 0.055, 0.65, 0.12);
     });

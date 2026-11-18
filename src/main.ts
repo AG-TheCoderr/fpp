@@ -7,6 +7,7 @@ import { GhostSystem } from './game/ghost';
 import { InputManager } from './game/input';
 import { PhysicsWorld } from './game/physics';
 import { Player } from './game/player';
+import { VelocityMotionBlur } from './game/postfx';
 import { ViewModel } from './game/viewmodel';
 import {
   computeRank,
@@ -34,6 +35,7 @@ class StrideGame {
   private sunDir = new THREE.Vector3();
   private sky: SkySystem;
   private mats;
+  private motionBlur: VelocityMotionBlur;
 
   private audio: AudioEngine;
   private fx: EffectsSystem;
@@ -74,7 +76,7 @@ class StrideGame {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    // 2. Scene & Mirror's Edge City of Glass atmospheric haze
+    // 2. Scene & sunlit metropolitan haze
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#c9e0f5');
     this.scene.fog = new THREE.FogExp2('#d2e5f7', 0.0029);
@@ -110,10 +112,12 @@ class StrideGame {
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
 
-    // 4. World & game systems
+    // 4. World, post-FX & game systems
     this.mats = createMaterials(this.renderer.capabilities.getMaxAnisotropy());
     this.sky = new SkySystem();
     this.scene.add(this.sky.group);
+
+    this.motionBlur = new VelocityMotionBlur(this.renderer);
 
     this.audio = new AudioEngine();
     this.audio.setVolume(this.settings.volume);
@@ -125,7 +129,6 @@ class StrideGame {
     this.scene.add(this.ghost.group);
 
     this.viewModel = new ViewModel();
-    this.camera.add(this.viewModel.handRig);
     this.scene.add(this.viewModel.ropeMesh);
     this.viewModel.setVisible(false);
 
@@ -164,7 +167,6 @@ class StrideGame {
       onUiSound: (accent) => this.audio.playUiClick(accent),
     });
 
-    // Build initial course (01 ROOFTOP) for the live skyline background
     this.loadCourse(0);
     this.ui.showTitle(0);
 
@@ -174,25 +176,52 @@ class StrideGame {
 
   private createPlayerEvents() {
     return {
-      onFootstep: (speed: number, isWall: boolean) => this.audio.playFootstep(speed, isWall),
-      onJump: (boosted: boolean) => this.audio.playJump(boosted),
+      onFootstep: (speed: number, isWall: boolean, foot: -1 | 1) => {
+        this.audio.playFootstep(speed, isWall, foot);
+        this.cameraRig.onFootstrike(speed, isWall, foot, this.settings.headBob);
+      },
+      onPivot: (intensity: number) => {
+        this.audio.playPivot(intensity);
+        this.cameraRig.onPivotImpulse(
+          this.input.state.right,
+          intensity,
+          this.settings.headBob
+        );
+        this.fx.spawnBurst(this.player.x, this.player.y + 0.05, this.player.z, '#e8edf2', 4);
+      },
+      onJump: (boosted: boolean) => {
+        this.audio.playJump(boosted);
+        this.cameraRig.onJumpImpulse(boosted, this.settings.headBob);
+      },
       onLand: (impact: number, intoSlide: boolean) => {
         this.audio.playLand(impact, intoSlide);
-        this.cameraRig.addLandingImpact(impact, intoSlide);
+        this.cameraRig.addLandingImpact(impact, intoSlide, this.settings.headBob);
       },
-      onSlideStart: () => {
-        this.audio.playSlideStart();
-        this.fx.spawnBurst(this.player.x, this.player.y + 0.1, this.player.z, '#e8edf2', 7);
+      onSlideStart: (_speed: number, slopeSlam: boolean) => {
+        this.audio.playSlideStart(slopeSlam);
+        this.fx.spawnBurst(
+          this.player.x,
+          this.player.y + 0.08,
+          this.player.z,
+          '#e8edf2',
+          slopeSlam ? 11 : 6
+        );
       },
-      onVault: (spring: boolean) => this.audio.playVault(spring),
+      onVault: (spring: boolean) => {
+        this.audio.playVault(spring);
+        this.cameraRig.onVaultImpulse(spring, this.settings.headBob);
+      },
       onMantle: () => this.audio.playMantle(),
       onWallRunStart: () => this.audio.playWallRunStart(),
-      onWallKick: () => this.audio.playWallKick(),
+      onWallKick: (side: -1 | 1) => {
+        this.audio.playWallKick();
+        this.cameraRig.onWallKickImpulse(side, this.settings.headBob);
+      },
       onGrappleAttach: () => this.audio.playGrappleAttach(),
       onGrappleRelease: (slingshot: boolean) => this.audio.playGrappleRelease(slingshot),
       onLaunchPad: () => {
         this.audio.playLaunchPad();
-        this.fx.triggerFlash('160, 238, 255', 0.14);
+        this.fx.triggerFlash('160, 238, 255', 0.12);
       },
       onFovPunch: (deg: number) => this.cameraRig.addFovPunch(deg),
       onCheckpoint: (cp: { index: number; x: number; y: number; z: number }, elapsed: number) => {
@@ -202,20 +231,21 @@ class StrideGame {
         const ahead = delta === null || delta <= 0;
         this.audio.playCheckpoint(ahead);
         this.ui.flashSplit(delta, cp.index + 1);
-        this.fx.spawnBurst(cp.x, cp.y + 1.2, cp.z, '#15e680', 16);
-        this.fx.triggerFlash('80, 255, 165', 0.1);
+        this.fx.spawnBurst(cp.x, cp.y + 1.2, cp.z, '#15e680', 14);
+        this.fx.triggerFlash('80, 255, 165', 0.08);
       },
       onFinish: (elapsed: number, peakSpeed: number, splits: number[]) => {
         this.handleFinish(elapsed, peakSpeed, splits);
       },
       onRespawn: (fullReset: boolean) => {
         this.audio.playReset();
+        this.motionBlur.resetVelocity();
         if (fullReset) {
           this.builtCourse?.resetCheckpoints();
           this.ghost.resetRun();
           this.cameraRig.reset(this.settings.fov);
         }
-        this.fx.triggerFlash('255, 255, 255', 0.15);
+        this.fx.triggerFlash('255, 255, 255', 0.14);
       },
     };
   }
@@ -235,7 +265,6 @@ class StrideGame {
     this.courseIndex = clamped;
     const course = COURSES[clamped];
 
-    // Orient sun for course's signature architectural light & shadows
     const ce = Math.cos(course.sunElevation);
     this.sunDir
       .set(
@@ -245,6 +274,7 @@ class StrideGame {
       )
       .normalize();
     this.sky.setSunDirection(this.sunDir);
+    this.viewModel.setSunDirection(this.sunDir);
 
     this.builtCourse = new BuiltCourse(course, this.mats);
     this.scene.add(this.builtCourse.group);
@@ -275,6 +305,7 @@ class StrideGame {
     );
 
     this.cameraRig.reset(this.settings.fov);
+    this.motionBlur.resetVelocity();
     this.viewModel.setVisible(true);
     this.input.clearInputs();
     this.input.gameplayActive = true;
@@ -292,6 +323,7 @@ class StrideGame {
       this.currentRecord ? decodeGhost(this.currentRecord.ghost) : []
     );
     this.player.resetCourse(true);
+    this.motionBlur.resetVelocity();
     this.viewModel.setVisible(true);
     this.input.clearInputs();
     this.input.gameplayActive = true;
@@ -316,7 +348,7 @@ class StrideGame {
     this.input.gameplayActive = false;
     this.input.clearInputs();
     this.input.exitLock();
-    this.audio.updateContinuous(0, false, false);
+    this.audio.updateContinuous(0, false, 0, false, false);
     this.ui.showPaused(COURSES[this.courseIndex]);
   }
 
@@ -362,8 +394,8 @@ class StrideGame {
     }
 
     this.audio.playFinish(isNewBest);
-    this.fx.triggerFlash('255, 255, 255', 0.28);
-    this.fx.spawnBurst(course.finish.x, course.finish.y + 2, course.finish.z, '#15e680', 26);
+    this.fx.triggerFlash('255, 255, 255', 0.24);
+    this.fx.spawnBurst(course.finish.x, course.finish.y + 2, course.finish.z, '#15e680', 24);
 
     this.screen = 'finished';
     this.input.gameplayActive = false;
@@ -414,7 +446,6 @@ class StrideGame {
   }
 
   private updateShadowFrustum(): void {
-    // Snap shadow target to 1m grid around camera so shadows remain razor-sharp with zero shimmer
     const sx = Math.round(this.camera.position.x);
     const sy = Math.round(this.camera.position.y);
     const sz = Math.round(this.camera.position.z);
@@ -431,7 +462,9 @@ class StrideGame {
     const h = window.innerHeight;
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(w, h);
+    this.motionBlur.resize();
     this.fx.resize();
   }
 
@@ -443,13 +476,13 @@ class StrideGame {
     const dt = Math.min(0.05, Math.max(0, rawDt));
     const course = COURSES[this.courseIndex];
 
+    let activeMotionBlur = false;
+
     if (this.screen === 'playing') {
-      // Apply mouse/key look immediately per render frame for zero input latency
       const [dYaw, dPitch] = this.input.consumeLookDelta(this.settings.sensitivity, dt);
       this.player.yaw += dYaw;
       this.player.pitch = Math.max(-1.46, Math.min(1.46, this.player.pitch + dPitch));
 
-      // Fixed 120 Hz swept parkour simulation
       this.accumulator += dt;
       while (this.accumulator >= FIXED_DT) {
         this.input.tickFixed(FIXED_DT);
@@ -463,12 +496,15 @@ class StrideGame {
       }
 
       if ((this.screen as GameScreen) === 'playing') {
+        activeMotionBlur = true;
         const alpha = this.accumulator / FIXED_DT;
+
         this.cameraRig.updateGameplay(
           this.player,
           alpha,
           dt,
           this.settings.fov,
+          this.settings.headBob,
           this.input.state.right
         );
         this.viewModel.update(this.player, dt, this.camera);
@@ -478,12 +514,36 @@ class StrideGame {
           this.player.lockedGrapple?.id ?? null,
           this.player.activeGrapple?.id ?? null
         );
+
+        const isGroundSliding =
+          this.player.state === 'slide' && this.player.grounded;
+        if (
+          isGroundSliding &&
+          (this.player.horizSpeed > 13.5 ||
+            Math.abs(this.player.slideSteer) > 0.35 ||
+            this.player.slideBraking)
+        ) {
+          const extra =
+            Math.abs(this.player.slideSteer) + (this.player.slideBraking ? 1.0 : 0);
+          this.fx.emitSlideGrit(
+            this.player.x,
+            this.player.y,
+            this.player.z,
+            this.player.vx,
+            this.player.vz,
+            extra,
+            dt
+          );
+        }
+
         this.audio.updateContinuous(
           this.player.totalSpeed,
-          this.player.state === 'slide' && this.player.grounded,
+          isGroundSliding,
+          this.player.slideSteer,
+          this.player.slideBraking,
           true
         );
-        this.fx.update(dt, this.player.horizSpeed, this.camera.position, true);
+        this.fx.update(dt, this.player.totalSpeed, this.camera.position, true);
         this.ui.updateHud(
           this.player,
           course,
@@ -494,26 +554,49 @@ class StrideGame {
         );
       }
     } else if (this.screen === 'finished') {
-      // Smooth dramatic slow-motion coast past the finish arch
       this.player.step(this.input.state, dt);
-      this.cameraRig.updateGameplay(this.player, 1, dt, this.settings.fov, 0);
+      this.cameraRig.updateGameplay(
+        this.player,
+        1,
+        dt,
+        this.settings.fov,
+        this.settings.headBob * 0.5,
+        0
+      );
       this.builtCourse?.update(dt * 0.25, null, null);
-      this.audio.updateContinuous(0, false, false);
+      this.audio.updateContinuous(0, false, 0, false, false);
       this.fx.update(dt * 0.35, 0, this.camera.position, false);
     } else if (this.screen === 'paused') {
-      // Freeze gameplay cleanly on pause
-      this.audio.updateContinuous(0, false, false);
+      this.audio.updateContinuous(0, false, 0, false, false);
     } else {
-      // Live 3D sunlit skyline camera sweep behind Title & Course Select!
       this.cameraRig.updateFlyover(course, dt);
       this.builtCourse?.update(dt, null, null);
-      this.audio.updateContinuous(0, false, false);
+      this.audio.updateContinuous(0, false, 0, false, false);
       this.fx.update(dt, 0, this.camera.position, false);
     }
 
     this.sky.update(dt, this.camera.position);
     this.updateShadowFrustum();
-    this.renderer.render(this.scene, this.camera);
+
+    // Render world with per-pixel depth-reconstructed velocity motion blur
+    this.motionBlur.render(
+      this.scene,
+      this.camera,
+      this.player.vx,
+      this.player.vy,
+      this.player.vz,
+      this.cameraRig.angVelYaw,
+      this.cameraRig.angVelPitch,
+      this.cameraRig.angVelRoll,
+      this.settings.motionBlur,
+      dt,
+      activeMotionBlur
+    );
+
+    // Composite crisp first-person hands & power-slide runner leg on top
+    if (activeMotionBlur) {
+      this.viewModel.renderOverlay(this.renderer, this.camera);
+    }
   }
 }
 
