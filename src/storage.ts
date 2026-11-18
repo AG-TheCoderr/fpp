@@ -1,4 +1,12 @@
-import { CourseRecord, GhostFrame, Rank, RankTimes, Settings } from './types';
+import {
+  CourseRecord,
+  FoliageDensity,
+  GhostFrame,
+  GraphicsQuality,
+  Rank,
+  RankTimes,
+  Settings,
+} from './types';
 
 const SETTINGS_KEY = 'stride_settings_v1';
 const RECORDS_KEY = 'stride_records_v1';
@@ -9,7 +17,10 @@ export const DEFAULT_SETTINGS: Settings = {
   volume: 0.75,
   motionBlur: 1.0,
   headBob: 1.0,
+  graphics: 'high',
+  foliage: 'high',
   showGhost: true,
+  showFps: false,
 };
 
 export function computeRank(time: number, ranks: RankTimes): Rank {
@@ -48,7 +59,10 @@ export function loadSettings(): Settings {
       volume: clamp(Number(parsed.volume ?? DEFAULT_SETTINGS.volume), 0, 1),
       motionBlur: clamp(Number(parsed.motionBlur ?? DEFAULT_SETTINGS.motionBlur), 0, 1.5),
       headBob: clamp(Number(parsed.headBob ?? DEFAULT_SETTINGS.headBob), 0, 1.5),
+      graphics: isGraphicsQuality(parsed.graphics) ? parsed.graphics : 'high',
+      foliage: isFoliageDensity(parsed.foliage) ? parsed.foliage : 'high',
       showGhost: typeof parsed.showGhost === 'boolean' ? parsed.showGhost : true,
+      showFps: typeof parsed.showFps === 'boolean' ? parsed.showFps : false,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -148,4 +162,12 @@ export function decodeGhost(data: number[]): GhostFrame[] {
 function clamp(v: number, lo: number, hi: number): number {
   if (Number.isNaN(v)) return lo;
   return Math.max(lo, Math.min(hi, v));
+}
+
+function isGraphicsQuality(v: unknown): v is GraphicsQuality {
+  return v === 'low' || v === 'medium' || v === 'high';
+}
+
+function isFoliageDensity(v: unknown): v is FoliageDensity {
+  return v === 'off' || v === 'low' || v === 'high';
 }

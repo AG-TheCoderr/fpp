@@ -9,12 +9,18 @@ interface SpeedFilament {
 }
 
 interface BurstParticle {
-  mesh: THREE.Mesh;
+  x: number;
+  y: number;
+  z: number;
   vx: number;
   vy: number;
   vz: number;
   life: number;
   maxLife: number;
+  cr: number;
+  cg: number;
+  cb: number;
+  alive: boolean;
 }
 
 export class EffectsSystem {
@@ -26,16 +32,18 @@ export class EffectsSystem {
   private flashColor = '255, 255, 255';
   private time = 0;
   private slideDustAccum = 0;
+  private canvasDirty = true;
 
   // Ambient sunlit floating motes around camera
   private motes: THREE.Points;
   private moteOffsets: Float32Array;
   private readonly moteCount = 85;
 
-  // Reusable burst materials & geometry (zero GPU allocations in gameplay)
+  private readonly poolSize = 160;
   private bursts: BurstParticle[] = [];
-  private burstGeo: THREE.BoxGeometry;
-  private matCache = new Map<string, THREE.MeshBasicMaterial>();
+  private burstMesh: THREE.InstancedMesh;
+  private burstDummy = new THREE.Object3D();
+  private burstColor = new THREE.Color();
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
@@ -75,20 +83,69 @@ export class EffectsSystem {
     this.motes.frustumCulled = false;
     this.group.add(this.motes);
 
-    this.burstGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+    const burstGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+    const burstMat = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+    });
+    this.burstMesh = new THREE.InstancedMesh(burstGeo, burstMat, this.poolSize);
+    this.burstMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.burstMesh.frustumCulled = false;
+    this.burstMesh.count = 0;
+    this.group.add(this.burstMesh);
+    for (let i = 0; i < this.poolSize; i++) {
+      this.bursts.push({
+        x: 0,
+        y: 0,
+        z: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        life: 0,
+        maxLife: 1,
+        cr: 1,
+        cg: 1,
+        cb: 1,
+        alive: false,
+      });
+    }
   }
 
-  private getBurstMat(colorHex: string): THREE.MeshBasicMaterial {
-    let m = this.matCache.get(colorHex);
-    if (!m) {
-      m = new THREE.MeshBasicMaterial({
-        color: colorHex,
-        transparent: true,
-        opacity: 0.78,
-      });
-      this.matCache.set(colorHex, m);
+  private parseColor(hex: string): [number, number, number] {
+    const c = this.burstColor.set(hex);
+    return [c.r, c.g, c.b];
+  }
+
+  private spawnOne(
+    x: number,
+    y: number,
+    z: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    maxLife: number,
+    hex: string
+  ): void {
+    for (let i = 0; i < this.poolSize; i++) {
+      const p = this.bursts[i];
+      if (p.alive) continue;
+      const [r, g, b] = this.parseColor(hex);
+      p.alive = true;
+      p.x = x;
+      p.y = y;
+      p.z = z;
+      p.vx = vx;
+      p.vy = vy;
+      p.vz = vz;
+      p.life = 0;
+      p.maxLife = maxLife;
+      p.cr = r;
+      p.cg = g;
+      p.cb = b;
+      return;
     }
-    return m;
   }
 
   resize(): void {
@@ -103,25 +160,19 @@ export class EffectsSystem {
   }
 
   spawnBurst(x: number, y: number, z: number, colorHex: string, count = 12): void {
-    const mat = this.getBurstMat(colorHex);
     for (let i = 0; i < count; i++) {
-      const mesh = new THREE.Mesh(this.burstGeo, mat);
-      mesh.position.set(
-        x + (Math.random() - 0.5) * 1.1,
-        y + Math.random() * 0.9,
-        z + (Math.random() - 0.5) * 1.1
-      );
-      this.group.add(mesh);
       const a = Math.random() * Math.PI * 2;
       const spd = 2.0 + Math.random() * 5.2;
-      this.bursts.push({
-        mesh,
-        vx: Math.cos(a) * spd,
-        vy: 1.6 + Math.random() * 4.5,
-        vz: Math.sin(a) * spd,
-        life: 0,
-        maxLife: 0.36 + Math.random() * 0.22,
-      });
+      this.spawnOne(
+        x + (Math.random() - 0.5) * 1.1,
+        y + Math.random() * 0.9,
+        z + (Math.random() - 0.5) * 1.1,
+        Math.cos(a) * spd,
+        1.6 + Math.random() * 4.5,
+        Math.sin(a) * spd,
+        0.36 + Math.random() * 0.22,
+        colorHex
+      );
     }
   }
 
@@ -136,24 +187,18 @@ export class EffectsSystem {
   ): void {
     const rate = 18 + extraIntensity * 22;
     this.slideDustAccum += dt * rate;
-    const mat = this.getBurstMat('#e6ebf0');
     while (this.slideDustAccum >= 1) {
       this.slideDustAccum -= 1;
-      const mesh = new THREE.Mesh(this.burstGeo, mat);
-      mesh.position.set(
+      this.spawnOne(
         x + (Math.random() - 0.5) * 0.55,
         y + 0.06 + Math.random() * 0.1,
-        z + (Math.random() - 0.5) * 0.55
+        z + (Math.random() - 0.5) * 0.55,
+        -vx * 0.12 + (Math.random() - 0.5) * 2.2,
+        0.9 + Math.random() * 1.8,
+        -vz * 0.12 + (Math.random() - 0.5) * 2.2,
+        0.22 + Math.random() * 0.14,
+        '#e6ebf0'
       );
-      this.group.add(mesh);
-      this.bursts.push({
-        mesh,
-        vx: -vx * 0.12 + (Math.random() - 0.5) * 2.2,
-        vy: 0.9 + Math.random() * 1.8,
-        vz: -vz * 0.12 + (Math.random() - 0.5) * 2.2,
-        life: 0,
-        maxLife: 0.22 + Math.random() * 0.14,
-      });
     }
   }
 
@@ -185,31 +230,49 @@ export class EffectsSystem {
     }
     posAttr.needsUpdate = true;
 
-    // Update 3D burst/dust particles
-    for (let i = this.bursts.length - 1; i >= 0; i--) {
+    let vis = 0;
+    const dummy = this.burstDummy;
+    for (let i = 0; i < this.poolSize; i++) {
       const b = this.bursts[i];
+      if (!b.alive) continue;
       b.life += dt;
       if (b.life >= b.maxLife) {
-        this.group.remove(b.mesh);
-        this.bursts.splice(i, 1);
+        b.alive = false;
         continue;
       }
       b.vy -= 11 * dt;
-      b.mesh.position.x += b.vx * dt;
-      b.mesh.position.y += b.vy * dt;
-      b.mesh.position.z += b.vz * dt;
-      b.mesh.scale.setScalar(1 - b.life / b.maxLife);
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.z += b.vz * dt;
+      const s = 1 - b.life / b.maxLife;
+      dummy.position.set(b.x, b.y, b.z);
+      dummy.scale.setScalar(s);
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix();
+      this.burstMesh.setMatrixAt(vis, dummy.matrix);
+      this.burstColor.setRGB(b.cr, b.cg, b.cb);
+      this.burstMesh.setColorAt(vis, this.burstColor);
+      vis++;
+    }
+    this.burstMesh.count = vis;
+    this.burstMesh.visible = vis > 0;
+    if (vis > 0) {
+      this.burstMesh.instanceMatrix.needsUpdate = true;
+      if (this.burstMesh.instanceColor) this.burstMesh.instanceColor.needsUpdate = true;
     }
 
-    // 2D overlay: minor, delicate peripheral wind filaments ONLY at high velocity (> 16.2 m/s)
     const w = this.canvas.width;
     const h = this.canvas.height;
-    this.ctx.clearRect(0, 0, w, h);
-
     const targetIntensity = isGameplay
       ? Math.max(0, Math.min(1, (totalSpeed - 16.2) / 9.5))
       : 0;
     this.smoothIntensity += (targetIntensity - this.smoothIntensity) * Math.min(1, 8 * dt);
+    const needCanvas = this.smoothIntensity > 0.015 || this.flashAlpha > 0.004;
+    if (!needCanvas && !this.canvasDirty) {
+      return;
+    }
+    this.ctx.clearRect(0, 0, w, h);
+    this.canvasDirty = needCanvas;
 
     if (this.smoothIntensity > 0.015) {
       const cx = w * 0.5;

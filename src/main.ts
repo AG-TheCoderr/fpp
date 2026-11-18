@@ -18,10 +18,11 @@ import {
   saveCourseRecord,
   saveSettings,
 } from './storage';
-import { CourseRecord, GameScreen } from './types';
+import { CourseRecord, GameScreen, GraphicsQuality } from './types';
 import { GameUI } from './ui/hud';
 import { BuiltCourse } from './world/builder';
 import { COURSES } from './world/courses';
+import { FrustumCuller } from './world/culler';
 import { createMaterials } from './world/materials';
 import { SkySystem } from './world/sky';
 
@@ -36,6 +37,14 @@ class StrideGame {
   private sky: SkySystem;
   private mats;
   private motionBlur: VelocityMotionBlur;
+  private culler = new FrustumCuller();
+  private shadowSnapX = Number.NaN;
+  private shadowSnapY = 0;
+  private shadowSnapZ = 0;
+  private shadowAge = 1;
+  private gfxDist = 1;
+  private autoDpr = 1;
+  private fpsEma = 60;
 
   private audio: AudioEngine;
   private fx: EffectsSystem;
@@ -159,6 +168,7 @@ class StrideGame {
         this.settings = { ...next };
         saveSettings(this.settings);
         this.audio.setVolume(this.settings.volume);
+        this.applyGraphics(this.settings.graphics);
       },
       onRecordsCleared: () => {
         this.currentRecord = null;
@@ -167,6 +177,7 @@ class StrideGame {
       onUiSound: (accent) => this.audio.playUiClick(accent),
     });
 
+    this.applyGraphics(this.settings.graphics);
     this.loadCourse(0);
     this.ui.showTitle(0);
 
@@ -312,6 +323,7 @@ class StrideGame {
     this.input.finishedActive = false;
     this.screen = 'playing';
     this.ui.showPlaying(course, this.courseIndex);
+    this.input.touch.setActive(true);
     this.input.requestLock();
   }
 
@@ -330,6 +342,7 @@ class StrideGame {
     this.input.finishedActive = false;
     this.screen = 'playing';
     this.ui.showPlaying(course, this.courseIndex);
+    this.input.touch.setActive(true);
     if (!this.input.pointerLocked) {
       this.input.requestLock();
     }
@@ -348,6 +361,7 @@ class StrideGame {
     this.input.gameplayActive = false;
     this.input.clearInputs();
     this.input.exitLock();
+    this.input.touch.setActive(false);
     this.audio.updateContinuous(0, false, 0, false, false);
     this.ui.showPaused(COURSES[this.courseIndex]);
   }
@@ -360,6 +374,7 @@ class StrideGame {
     this.input.gameplayActive = true;
     this.input.finishedActive = false;
     this.ui.showPlaying(COURSES[this.courseIndex], this.courseIndex);
+    this.input.touch.setActive(true);
     this.input.requestLock();
   }
 
@@ -402,6 +417,7 @@ class StrideGame {
     this.input.finishedActive = true;
     this.input.clearInputs();
     this.input.exitLock();
+    this.input.touch.setActive(false);
     this.viewModel.setVisible(false);
 
     this.ui.showFinished({
@@ -430,6 +446,7 @@ class StrideGame {
     this.input.clearInputs();
     this.input.exitLock();
     this.viewModel.setVisible(false);
+    this.input.touch.setActive(false);
     this.ghost.resetRun();
     this.ui.showTitle(this.courseIndex);
   }
@@ -441,20 +458,56 @@ class StrideGame {
     this.input.clearInputs();
     this.input.exitLock();
     this.viewModel.setVisible(false);
+    this.input.touch.setActive(false);
     this.ghost.resetRun();
     this.ui.showCourses(this.courseIndex);
   }
 
+  private applyGraphics(q: GraphicsQuality): void {
+    const low = q === 'low';
+    const med = q === 'medium';
+    this.gfxDist = low ? 0.72 : med ? 0.88 : 1;
+    this.sunLight.castShadow = !low;
+    const mapRes = low ? 512 : med ? 1024 : 2048;
+    this.sunLight.shadow.mapSize.set(mapRes, mapRes);
+    const sBound = low ? 36 : med ? 46 : 48;
+    this.sunLight.shadow.camera.left = -sBound;
+    this.sunLight.shadow.camera.right = sBound;
+    this.sunLight.shadow.camera.top = sBound;
+    this.sunLight.shadow.camera.bottom = -sBound;
+    this.sunLight.shadow.camera.updateProjectionMatrix();
+    this.builtCourse?.foliage?.setCanopyShadows(!low);
+    this.motionBlur.setQuality(q);
+    const cap = low ? 1 : med ? 1.5 : 2;
+    this.autoDpr = Math.min(window.devicePixelRatio || 1, cap);
+    this.renderer.setPixelRatio(this.autoDpr);
+    this.onResize();
+  }
+
   private updateShadowFrustum(): void {
-    const sx = Math.round(this.camera.position.x);
-    const sy = Math.round(this.camera.position.y);
-    const sz = Math.round(this.camera.position.z);
+    const texel = this.settings.graphics === 'high' ? 1 : 2;
+    const sx = Math.round(this.camera.position.x / texel) * texel;
+    const sy = Math.round(this.camera.position.y / texel) * texel;
+    const sz = Math.round(this.camera.position.z / texel) * texel;
+    this.shadowAge += 1;
+    const moved =
+      sx !== this.shadowSnapX || sy !== this.shadowSnapY || sz !== this.shadowSnapZ;
+    if (!moved && this.shadowAge < 4) {
+      this.sunLight.shadow.needsUpdate = false;
+      return;
+    }
+    this.shadowSnapX = sx;
+    this.shadowSnapY = sy;
+    this.shadowSnapZ = sz;
+    this.shadowAge = 0;
     this.sunLight.target.position.set(sx, sy, sz);
+    this.sunLight.target.updateMatrixWorld();
     this.sunLight.position.set(
-      sx + this.sunDir.x * 78,
-      sy + this.sunDir.y * 78,
-      sz + this.sunDir.z * 78
+      sx + this.sunDir.x * 70,
+      sy + this.sunDir.y * 70,
+      sz + this.sunDir.z * 70
     );
+    this.sunLight.shadow.needsUpdate = true;
   }
 
   private onResize(): void {
@@ -462,7 +515,10 @@ class StrideGame {
     const h = window.innerHeight;
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const cap =
+      this.settings.graphics === 'low' ? 1 : this.settings.graphics === 'medium' ? 1.5 : 2;
+    this.autoDpr = Math.min(window.devicePixelRatio || 1, cap);
+    this.renderer.setPixelRatio(this.autoDpr);
     this.renderer.setSize(w, h);
     this.motionBlur.resize();
     this.fx.resize();
@@ -509,10 +565,15 @@ class StrideGame {
         );
         this.viewModel.update(this.player, dt, this.camera);
         this.ghost.updatePlayback(this.player, this.settings.showGhost);
+        this.culler.update(this.camera);
         this.builtCourse?.update(
           dt,
           this.player.lockedGrapple?.id ?? null,
-          this.player.activeGrapple?.id ?? null
+          this.player.activeGrapple?.id ?? null,
+          this.culler,
+          this.settings.foliage,
+          this.gfxDist,
+          this.settings.graphics === 'low'
         );
 
         const isGroundSliding =
@@ -563,20 +624,44 @@ class StrideGame {
         this.settings.headBob * 0.5,
         0
       );
-      this.builtCourse?.update(dt * 0.25, null, null);
+      this.culler.update(this.camera);
+      this.builtCourse?.update(
+        dt * 0.25,
+        null,
+        null,
+        this.culler,
+        this.settings.foliage,
+        this.gfxDist,
+        this.settings.graphics === 'low'
+      );
       this.audio.updateContinuous(0, false, 0, false, false);
       this.fx.update(dt * 0.35, 0, this.camera.position, false);
     } else if (this.screen === 'paused') {
       this.audio.updateContinuous(0, false, 0, false, false);
     } else {
       this.cameraRig.updateFlyover(course, dt);
-      this.builtCourse?.update(dt, null, null);
+      this.culler.update(this.camera);
+      this.builtCourse?.update(
+        dt,
+        null,
+        null,
+        this.culler,
+        this.settings.foliage,
+        this.gfxDist,
+        this.settings.graphics === 'low'
+      );
       this.audio.updateContinuous(0, false, 0, false, false);
       this.fx.update(dt, 0, this.camera.position, false);
     }
 
-    this.sky.update(dt, this.camera.position);
+    this.sky.update(dt, this.camera.position, this.settings.graphics !== 'low');
     this.updateShadowFrustum();
+
+    this.fpsEma = this.fpsEma * 0.92 + (1 / Math.max(0.001, dt)) * 0.08;
+    if (this.settings.graphics === 'high' && this.fpsEma < 40) {
+      this.autoDpr = Math.max(1, this.autoDpr * 0.96);
+      this.renderer.setPixelRatio(this.autoDpr);
+    }
 
     // Render world with per-pixel depth-reconstructed velocity motion blur
     this.motionBlur.render(

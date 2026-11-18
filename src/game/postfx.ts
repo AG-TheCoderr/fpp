@@ -16,6 +16,7 @@ const BLUR_FRAG = /* glsl */ `
   uniform float uBlurScale;
   uniform float uSpeedRatio;
   uniform float uFrameJitter;
+  uniform float uSampleCount;
 
   varying vec2 vUv;
 
@@ -110,11 +111,12 @@ const BLUR_FRAG = /* glsl */ `
       float jitter = ign(gl_FragCoord.xy + vec2(uFrameJitter * 71.0, uFrameJitter * 37.0)) - 0.5;
 
       // 12-tap jittered velocity reconstruction in linear HDR space
-      const int SAMPLES = 12;
+      int SAMPLES = int(uSampleCount + 0.5);
       vec3 accum = baseCol * 1.35;
       float wSum = 1.35;
 
-      for (int i = 0; i < SAMPLES; i++) {
+      for (int i = 0; i < 12; i++) {
+        if (i >= SAMPLES) break;
         float t = ((float(i) + 0.5 + jitter * 0.85) / float(SAMPLES)) - 0.5;
         vec2 sampleUv = clamp(vUv + vel * t, vec2(0.001), vec2(0.999));
         float sDepth = texture2D(tDepth, sampleUv).r;
@@ -161,6 +163,9 @@ export class VelocityMotionBlur {
   private unitScale = new THREE.Vector3(1, 1, 1);
   private smoothVel = new THREE.Vector3();
   private frameCounter = 0;
+  private renderScale = 1;
+  private sampleCount = 12;
+  private dprCap = 2;
 
   constructor(private renderer: THREE.WebGLRenderer) {
     const size = this.getBufferSize();
@@ -177,6 +182,7 @@ export class VelocityMotionBlur {
         uBlurScale: { value: 1.0 },
         uSpeedRatio: { value: 0.0 },
         uFrameJitter: { value: 0.0 },
+        uSampleCount: { value: 12 },
       },
       depthTest: false,
       depthWrite: false,
@@ -198,8 +204,25 @@ export class VelocityMotionBlur {
     this.quadScene.add(quad);
   }
 
+  setQuality(graphics: 'low' | 'medium' | 'high'): void {
+    if (graphics === 'low') {
+      this.renderScale = 0.72;
+      this.sampleCount = 6;
+      this.dprCap = 1;
+    } else if (graphics === 'medium') {
+      this.renderScale = 0.88;
+      this.sampleCount = 8;
+      this.dprCap = 1.5;
+    } else {
+      this.renderScale = 1;
+      this.sampleCount = 12;
+      this.dprCap = 2;
+    }
+    this.resize();
+  }
+
   private getBufferSize(): THREE.Vector2 {
-    const dpr = this.renderer.getPixelRatio();
+    const dpr = Math.min(this.renderer.getPixelRatio(), this.dprCap) * this.renderScale;
     return new THREE.Vector2(
       Math.max(1, Math.floor(window.innerWidth * dpr)),
       Math.max(1, Math.floor(window.innerHeight * dpr))
@@ -321,6 +344,7 @@ export class VelocityMotionBlur {
     this.material.uniforms.uSpeedRatio.value =
       smoothstep(15.5, 25.0, speed) * Math.min(1.2, blurSetting);
     this.material.uniforms.uFrameJitter.value = this.frameCounter / 64;
+    this.material.uniforms.uSampleCount.value = this.sampleCount;
 
     // Pass 1: Render 3D world to HDR + Depth target
     this.renderer.setRenderTarget(this.target);

@@ -28,7 +28,8 @@ export class GhostSystem {
   private runnerMat: THREE.MeshBasicMaterial;
   private trailLine: THREE.Line;
   private trailPositions: Float32Array;
-  private trailHistory: THREE.Vector3[] = [];
+  private trailHistory = new Float32Array(TRAIL_POINTS * 3);
+  private trailLen = 0;
 
   private recorded: GhostFrame[] = [];
   private recordAccum = 0;
@@ -83,7 +84,7 @@ export class GhostSystem {
     this.recorded = [];
     this.recordAccum = 0;
     this.playbackCursor = 0;
-    this.trailHistory.length = 0;
+    this.trailLen = 0;
     this.runner.visible = false;
     this.trailLine.visible = false;
   }
@@ -184,28 +185,41 @@ export class GhostSystem {
     this.runnerMat.opacity = 0.42 * fade;
     this.runner.visible = fade > 0.03;
 
-    // Update trailing wake ribbon
-    const ribbonPos = new THREE.Vector3(gx, gy + (isSlide ? 0.55 : 1.05), gz);
-    if (
-      this.trailHistory.length === 0 ||
-      this.trailHistory[0].distanceToSquared(ribbonPos) > 0.06
-    ) {
-      this.trailHistory.unshift(ribbonPos);
-      if (this.trailHistory.length > TRAIL_POINTS) {
-        this.trailHistory.pop();
+    const rx = gx;
+    const ry = gy + (isSlide ? 0.55 : 1.05);
+    const rz = gz;
+    let push = this.trailLen === 0;
+    if (!push) {
+      const dx = rx - this.trailHistory[0];
+      const dy = ry - this.trailHistory[1];
+      const dz = rz - this.trailHistory[2];
+      push = dx * dx + dy * dy + dz * dz > 0.06;
+    }
+    if (push) {
+      for (let i = Math.min(this.trailLen, TRAIL_POINTS - 1); i > 0; i--) {
+        const d = i * 3;
+        const s = (i - 1) * 3;
+        this.trailHistory[d] = this.trailHistory[s];
+        this.trailHistory[d + 1] = this.trailHistory[s + 1];
+        this.trailHistory[d + 2] = this.trailHistory[s + 2];
       }
+      this.trailHistory[0] = rx;
+      this.trailHistory[1] = ry;
+      this.trailHistory[2] = rz;
+      if (this.trailLen < TRAIL_POINTS) this.trailLen++;
     }
 
-    if (this.trailHistory.length >= 2) {
+    if (this.trailLen >= 2) {
       for (let i = 0; i < TRAIL_POINTS; i++) {
-        const pt = this.trailHistory[Math.min(i, this.trailHistory.length - 1)];
-        this.trailPositions[i * 3] = pt.x;
-        this.trailPositions[i * 3 + 1] = pt.y;
-        this.trailPositions[i * 3 + 2] = pt.z;
+        const src = Math.min(i, this.trailLen - 1) * 3;
+        this.trailPositions[i * 3] = this.trailHistory[src];
+        this.trailPositions[i * 3 + 1] = this.trailHistory[src + 1];
+        this.trailPositions[i * 3 + 2] = this.trailHistory[src + 2];
       }
       (this.trailLine.geometry.attributes.position as THREE.BufferAttribute).needsUpdate =
         true;
       this.trailLine.visible = fade > 0.1;
+      this.trailLine.frustumCulled = true;
     }
   }
 }

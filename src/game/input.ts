@@ -1,4 +1,5 @@
 import { PlayerInputState } from './player';
+import { TouchAction, TouchControls } from '../ui/touch';
 
 const JUMP_BUFFER = 0.15;
 const SLIDE_BUFFER = 0.16;
@@ -19,6 +20,7 @@ export class InputManager {
   private dragLookActive = false;
   private lastDragX = 0;
   private lastDragY = 0;
+  readonly touch: TouchControls;
 
   private accumDX = 0;
   private accumDY = 0;
@@ -43,6 +45,12 @@ export class InputManager {
     private canvas: HTMLCanvasElement,
     private callbacks: InputCallbacks
   ) {
+    const touchHost = document.getElementById('touch-root') ?? document.body;
+    this.touch = new TouchControls(touchHost, (action: TouchAction) => {
+      if (action === 'pause') this.callbacks.onPauseToggle?.();
+      else if (action === 'restart') this.callbacks.onRestart?.();
+      else if (action === 'checkpoint') this.callbacks.onCheckpointReset?.();
+    });
     this.bindEvents();
   }
 
@@ -125,6 +133,7 @@ export class InputManager {
 
     this.canvas.addEventListener('mousedown', (e) => {
       if (!this.gameplayActive) return;
+      if (this.touch.enabled) return;
 
       // Acquire pointer lock if not yet locked
       if (!this.pointerLocked) {
@@ -179,7 +188,7 @@ export class InputManager {
       if (this.pointerLocked) {
         this.pointerLockFailed = false;
         this.dragLookActive = false;
-      } else if (wasLocked && this.gameplayActive) {
+      } else if (wasLocked && this.gameplayActive && !this.touch.enabled) {
         // User pressed ESC to release pointer lock -> open pause menu cleanly
         this.clearInputs();
         this.callbacks.onPointerLockLost?.();
@@ -192,6 +201,10 @@ export class InputManager {
   }
 
   requestLock(): void {
+    if (this.touch.enabled) {
+      this.pointerLockFailed = false;
+      return;
+    }
     try {
       const maybePromise = this.canvas.requestPointerLock?.() as unknown as
         | Promise<void>
@@ -236,8 +249,9 @@ export class InputManager {
 
   consumeLookDelta(sensitivity: number, dt: number): [number, number] {
     const baseRadPerPx = 0.0021 * sensitivity;
-    let dYaw = -this.accumDX * baseRadPerPx;
-    let dPitch = -this.accumDY * baseRadPerPx;
+    const [tdx, tdy] = this.touch.consumeLook();
+    let dYaw = -(this.accumDX + tdx * 1.35) * baseRadPerPx;
+    let dPitch = -(this.accumDY + tdy * 1.35) * baseRadPerPx;
     this.accumDX = 0;
     this.accumDY = 0;
 
@@ -259,18 +273,29 @@ export class InputManager {
     const d = this.keys.has('KeyD') ? 1 : 0;
     const a = this.keys.has('KeyA') ? 1 : 0;
 
-    this.state.forward = w - s;
-    this.state.right = d - a;
-    this.state.jumpHeld = this.keys.has('Space');
+    const touch = this.touch.snapshot();
+    this.state.forward = clampAxis((w - s) + touch.forward);
+    this.state.right = clampAxis((d - a) + touch.right);
+    this.state.jumpHeld = this.keys.has('Space') || touch.jumpHeld;
     this.state.slideHeld =
       this.keys.has('ShiftLeft') ||
       this.keys.has('ShiftRight') ||
       this.keys.has('KeyC') ||
-      this.keys.has('ControlLeft');
-    this.state.grappleHeld = this.keys.has('KeyE') || this.rmbHeld || this.lmbHeld;
+      this.keys.has('ControlLeft') ||
+      touch.slideHeld;
+    this.state.grappleHeld =
+      this.keys.has('KeyE') || this.rmbHeld || this.lmbHeld || touch.grappleHeld;
+
+    if (this.touch.takeJumpPress()) this.state.jumpBufferTimer = JUMP_BUFFER;
+    if (this.touch.takeSlidePress()) this.state.slideBufferTimer = SLIDE_BUFFER;
+    if (this.touch.takeGrapplePress()) this.state.grappleBufferTimer = GRAPPLE_BUFFER;
 
     this.state.jumpBufferTimer = Math.max(0, this.state.jumpBufferTimer - dt);
     this.state.slideBufferTimer = Math.max(0, this.state.slideBufferTimer - dt);
     this.state.grappleBufferTimer = Math.max(0, this.state.grappleBufferTimer - dt);
   }
+}
+
+function clampAxis(v: number): number {
+  return Math.max(-1, Math.min(1, v));
 }

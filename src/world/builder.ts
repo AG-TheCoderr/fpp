@@ -9,11 +9,19 @@ import {
   RampDef,
   RampDir,
 } from '../types';
+import { FoliageDensity } from '../types';
 import {
   MaterialLibrary,
   createRampGeometry,
   createWorldBoxGeometry,
 } from './materials';
+import {
+  CulledInstancedBatch,
+  CulledSectorMesh,
+  FrustumCuller,
+  RawInstance,
+} from './culler';
+import { CourseFoliage, SkylineTerrace } from './foliage';
 
 interface AnimatedFan {
   mesh: THREE.Object3D;
@@ -35,8 +43,6 @@ interface AnimatedGrapple {
 
 interface AnimatedBanner {
   mesh: THREE.Mesh;
-  basePositions: Float32Array;
-  phase: number;
 }
 
 interface CheckpointVisual {
@@ -55,6 +61,7 @@ function seededRand(seed: number): () => number {
 
 export class BuiltCourse {
   readonly group = new THREE.Group();
+  foliage: CourseFoliage | null = null;
   private disposables: THREE.BufferGeometry[] = [];
   private matDisposables: THREE.Material[] = [];
   private fans: AnimatedFan[] = [];
@@ -63,10 +70,39 @@ export class BuiltCourse {
   private banners: AnimatedBanner[] = [];
   private checkpoints: CheckpointVisual[] = [];
   private time = 0;
+  private skylineBatches: CulledInstancedBatch[] = [];
+  private skylineTerraces: SkylineTerrace[] = [];
+  private staticMeshes: CulledSectorMesh[] = [];
+  private bannerTime = { value: 0 };
 
   constructor(course: CourseDef, private mats: MaterialLibrary) {
     this.buildCourse(course);
     this.buildSkyline(course);
+    this.foliage = new CourseFoliage(course, mats, this.skylineTerraces);
+    this.group.add(this.foliage.group);
+  }
+
+  private freeze(obj: THREE.Object3D): void {
+    obj.matrixAutoUpdate = false;
+    obj.updateMatrix();
+  }
+
+  private trackStatic(mesh: THREE.Mesh, maxDist = 420, shadowPad = 4): void {
+    this.freeze(mesh);
+    mesh.geometry.computeBoundingSphere();
+    const sp = mesh.geometry.boundingSphere;
+    const wx = mesh.position.x;
+    const wy = mesh.position.y;
+    const wz = mesh.position.z;
+    this.staticMeshes.push({
+      mesh,
+      cx: wx + (sp?.center.x ?? 0),
+      cy: wy + (sp?.center.y ?? 0),
+      cz: wz + (sp?.center.z ?? 0),
+      radius: (sp?.radius ?? 8) * Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z),
+      maxDist,
+      shadowPad,
+    });
   }
 
   private trackGeo<T extends THREE.BufferGeometry>(geo: T): T {
@@ -121,17 +157,21 @@ export class BuiltCourse {
         slab.castShadow = true;
         slab.receiveShadow = true;
         this.group.add(slab);
+        this.trackStatic(slab, 380, 10);
 
-        // 2. Towering glass-and-concrete skyscraper shaft dropping 140m into the daylight haze!
-        const shaftH = 140;
+        // 2. Glass-and-concrete skyscraper shaft (trimmed depth; unseen -Y face dropped)
+        const shaftH = 92;
         const inset = 0.35;
         const sw = Math.max(2, b.w - inset * 2);
         const sd = Math.max(2, b.d - inset * 2);
         const shaftGeo = this.trackGeo(createWorldBoxGeometry(sw, shaftH, sd, 16, 14));
+        this.dropBoxFace(shaftGeo, 3);
         const shaft = new THREE.Mesh(shaftGeo, this.mats.glassFacade);
         shaft.position.set(b.x, b.y - shaftH * 0.5, b.z);
         shaft.receiveShadow = true;
+        shaft.castShadow = false;
         this.group.add(shaft);
+        this.trackStatic(shaft, 520, 2);
 
         // 3. Four crisp white corner structural pilasters grounding the brutalist look
         const pilGeo = this.trackGeo(new THREE.BoxGeometry(0.9, shaftH, 0.9));
@@ -144,6 +184,7 @@ export class BuiltCourse {
               b.z + sz * (b.d * 0.5 - 0.38)
             );
             this.group.add(pil);
+            this.trackStatic(pil, 420, 2);
           }
         }
 
@@ -177,6 +218,7 @@ export class BuiltCourse {
             b.guideDir === '+x' || b.guideDir === '-x' ? Math.min(4.2, b.d * 0.3) : 0;
           stMesh.position.set(b.x + offX, topY + 0.018, b.z + offZ);
           this.group.add(stMesh);
+          this.freeze(stMesh);
         }
 
         // 6. Non-colliding decorative rooftop HVAC condensers & vents on far outer corners
@@ -204,6 +246,7 @@ export class BuiltCourse {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         this.group.add(mesh);
+        this.trackStatic(mesh, 360, 8);
 
         // Under-slung steel girder beams + red edge accents
         const girderGeo = this.trackGeo(new THREE.BoxGeometry(b.w * 0.92, 0.7, 0.35));
@@ -211,6 +254,7 @@ export class BuiltCourse {
           const g = new THREE.Mesh(girderGeo, this.mats.darkSteel);
           g.position.set(b.x, b.y - 0.35, b.z + sz * (b.d * 0.38));
           this.group.add(g);
+          this.trackStatic(g, 280, 2);
         }
         if (b.guideDir) {
           this.addRunnerGuide(b.x, topY, b.z, b.w, b.d, b.guideDir);
@@ -226,6 +270,7 @@ export class BuiltCourse {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         this.group.add(mesh);
+        this.trackStatic(mesh, 300, 6);
 
         // Crisp white center speed stripe on catwalk
         const stripeGeo = this.trackGeo(
@@ -241,6 +286,7 @@ export class BuiltCourse {
         stripe.rotation.x = -Math.PI * 0.5;
         stripe.position.set(b.x, topY + 0.01, b.z);
         this.group.add(stripe);
+        this.freeze(stripe);
 
         // Slim steel support legs below catwalk (non-colliding, positioned directly under catwalk)
         const legH = 1.9;
@@ -251,6 +297,7 @@ export class BuiltCourse {
           const lz = b.d >= b.w ? b.z + b.d * s : b.z;
           leg.position.set(lx, b.y - legH * 0.5, lz);
           this.group.add(leg);
+          this.trackStatic(leg, 240, 2);
         }
         break;
       }
@@ -262,18 +309,21 @@ export class BuiltCourse {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         this.group.add(mesh);
+        this.trackStatic(mesh, 280, 6);
 
         // Sleek dark rubberized base plinth + crisp white top grip cap
         const capGeo = this.trackGeo(new THREE.BoxGeometry(b.w + 0.04, 0.07, b.d + 0.04));
         const cap = new THREE.Mesh(capGeo, this.mats.whiteConcrete);
         cap.position.set(b.x, topY - 0.035, b.z);
         this.group.add(cap);
+        this.trackStatic(cap, 240, 2);
 
         if (b.h > 0.5) {
           const baseGeo = this.trackGeo(new THREE.BoxGeometry(b.w + 0.06, 0.12, b.d + 0.06));
           const base = new THREE.Mesh(baseGeo, this.mats.darkSteel);
           base.position.set(b.x, b.y + 0.06, b.z);
           this.group.add(base);
+          this.trackStatic(base, 240, 2);
         }
         break;
       }
@@ -294,6 +344,7 @@ export class BuiltCourse {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         this.group.add(mesh);
+        this.trackStatic(mesh, 300, 6);
 
         // Twin heavy dark-steel support stanchions at the extreme LEFT/RIGHT ends of the barrier
         const spanAlongX = b.w >= b.d;
@@ -308,6 +359,7 @@ export class BuiltCourse {
           }
           leg.castShadow = true;
           this.group.add(leg);
+          this.trackStatic(leg, 240, 4);
         }
         break;
       }
@@ -337,6 +389,7 @@ export class BuiltCourse {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         this.group.add(mesh);
+        this.trackStatic(mesh, 320, 8);
 
         // Top & bottom crisp steel frame rails along the wall-run billboard
         const frameGeo = this.trackGeo(new THREE.BoxGeometry(b.w + 0.12, 0.2, b.d + 0.12));
@@ -345,6 +398,8 @@ export class BuiltCourse {
         const botFrame = new THREE.Mesh(frameGeo, this.mats.darkSteel);
         botFrame.position.set(b.x, b.y - 0.1, b.z);
         this.group.add(topFrame, botFrame);
+        this.trackStatic(topFrame, 280, 2);
+        this.trackStatic(botFrame, 280, 2);
         break;
       }
 
@@ -356,6 +411,7 @@ export class BuiltCourse {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         this.group.add(mesh);
+        this.trackStatic(mesh, 360, 8);
 
         // High-visibility Mirror's Edge directional turn chevrons on corner backstop walls!
         if (b.guideDir === '+x' || b.guideDir === '-x') {
@@ -365,6 +421,7 @@ export class BuiltCourse {
           sign.rotation.z = b.guideDir === '+x' ? -Math.PI * 0.5 : Math.PI * 0.5;
           sign.position.set(b.x, b.y + b.h * 0.54, b.z + b.d * 0.5 + 0.04);
           this.group.add(sign);
+          this.freeze(sign);
         }
         break;
       }
@@ -385,6 +442,7 @@ export class BuiltCourse {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         this.group.add(mesh);
+        this.trackStatic(mesh, 360, 8);
 
         // Highlight mantle-height step lips with a crisp red coping edge!
         if (b.guideDir) {
@@ -407,6 +465,7 @@ export class BuiltCourse {
             else lx = b.x + b.w * 0.5 - 0.08;
             lip.position.set(lx, topY - 0.07, lz);
             this.group.add(lip);
+            this.trackStatic(lip, 240, 2);
           }
         }
         break;
@@ -444,6 +503,7 @@ export class BuiltCourse {
     mesh.position.set(x, topY + 0.012, z);
     mesh.receiveShadow = true;
     this.group.add(mesh);
+    this.freeze(mesh);
   }
 
   private addTakeoffEdgeTrim(
@@ -468,6 +528,21 @@ export class BuiltCourse {
     else tx = x - w * 0.5 + 0.2;
     trim.position.set(tx, topY - 0.04, tz);
     this.group.add(trim);
+    this.trackStatic(trim, 240, 2);
+  }
+
+  private dropBoxFace(geo: THREE.BufferGeometry, face: number): void {
+    const index = geo.index;
+    if (!index) return;
+    const src = index.array;
+    const dropStart = face * 6;
+    const next: number[] = [];
+    for (let i = 0; i < index.count; i++) {
+      if (i >= dropStart && i < dropStart + 6) continue;
+      next.push(src[i]);
+    }
+    geo.setIndex(next);
+    geo.clearGroups();
   }
 
   private addRooftopEdgeProps(b: BoxDef, rand: () => number): void {
@@ -512,6 +587,8 @@ export class BuiltCourse {
 
       hvac.position.set(px, topY, pz);
       this.group.add(hvac);
+      this.freeze(body);
+      this.freeze(rim);
     }
 
     // Thin modern steel safety railing segments on lateral edges only (never takeoff/landing edges!)
@@ -528,6 +605,8 @@ export class BuiltCourse {
       const midBar = new THREE.Mesh(barGeo, this.mats.brushedMetal);
       midBar.position.set(rx, topY + 0.5, rz);
       this.group.add(topBar, midBar);
+      this.trackStatic(topBar, 200, 1);
+      this.trackStatic(midBar, 200, 1);
     }
   }
 
@@ -541,6 +620,7 @@ export class BuiltCourse {
     pent.castShadow = true;
     pent.receiveShadow = true;
     this.group.add(pent);
+    this.trackStatic(pent, 420, 6);
 
     // Sleek rooftop radio mast
     const mastH = 7 + rand() * 8;
@@ -548,6 +628,7 @@ export class BuiltCourse {
     const mast = new THREE.Mesh(mastGeo, this.mats.darkSteel);
     mast.position.set(b.x + 1.5, topY + 3.2 + mastH * 0.5, b.z - 1.5);
     this.group.add(mast);
+    this.trackStatic(mast, 380, 2);
   }
 
   private buildRamp(r: RampDef): void {
@@ -561,6 +642,7 @@ export class BuiltCourse {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.group.add(mesh);
+    this.trackStatic(mesh, 320, 8);
 
     // Add sleek dark steel side curbs on downhill concrete slide chutes
     if (!isRed) {
@@ -581,6 +663,7 @@ export class BuiltCourse {
         else if (r.dir === '+z') curb.rotation.x = -angle;
         else curb.rotation.x = angle;
         this.group.add(curb);
+        this.trackStatic(curb, 260, 2);
       }
     }
   }
@@ -759,14 +842,32 @@ export class BuiltCourse {
 
       // Tall fluttering emerald/white runner banners hanging inside the arch!
       const banGeo = this.trackGeo(new THREE.PlaneGeometry(1.15, 5.4, 2, 12));
-      const basePos = new Float32Array(
-        (banGeo.attributes.position as THREE.BufferAttribute).array
-      );
-      const ban = new THREE.Mesh(banGeo, this.mats.finishBanner);
+      const banMat = this.trackMat(this.mats.finishBanner.clone());
+      banMat.customProgramCacheKey = () => 'stride-banner-wind-v1';
+      const phase = sx * 1.1;
+      const uTime = this.bannerTime;
+      banMat.onBeforeCompile = (shader) => {
+        shader.uniforms.uBannerTime = uTime;
+        shader.vertexShader =
+          `uniform float uBannerTime;\n` +
+          shader.vertexShader.replace(
+            '#include <begin_vertex>',
+            /* glsl */ `
+            #include <begin_vertex>
+            {
+              float hang = max(0.0, (2.7 - position.y) / 5.4);
+              float hh = hang * hang;
+              transformed.z += sin(uBannerTime * 5.2 - hang * 4.5 + ${phase.toFixed(2)}) * 0.32 * hh;
+              transformed.x += cos(uBannerTime * 3.4 - hang * 3.0 + ${phase.toFixed(2)}) * 0.08 * hang;
+            }
+            `
+          );
+      };
+      const ban = new THREE.Mesh(banGeo, banMat);
       ban.position.set(sx * (halfSpan - 1.15), archH - 3.3, 0);
       ban.castShadow = true;
       g.add(ban);
-      this.banners.push({ mesh: ban, basePositions: basePos, phase: sx * 1.1 });
+      this.banners.push({ mesh: ban });
     }
 
     const topGeo = this.trackGeo(new THREE.BoxGeometry(halfSpan * 2 + 2.2, 1.1, 1.4));
@@ -843,8 +944,37 @@ export class BuiltCourse {
     };
 
     const towerGeo = this.trackGeo(new THREE.BoxGeometry(1, 1, 1));
+    const dummy = new THREE.Object3D();
+    const towersA: RawInstance[] = [];
+    const towersB: RawInstance[] = [];
+    const towersG: RawInstance[] = [];
+    const crowns: RawInstance[] = [];
+    const spires: RawInstance[] = [];
     let placed = 0;
     let attempts = 0;
+
+    const pushInst = (
+      list: RawInstance[],
+      x: number,
+      y: number,
+      z: number,
+      sx: number,
+      sy: number,
+      sz: number
+    ) => {
+      dummy.position.set(x, y, z);
+      dummy.scale.set(sx, sy, sz);
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix();
+      const r = Math.hypot(sx, sy, sz) * 0.5;
+      list.push({
+        matrix: dummy.matrix.clone(),
+        cx: x,
+        cy: y,
+        cz: z,
+        radius: r,
+      });
+    };
 
     while (placed < 78 && attempts < 450) {
       attempts++;
@@ -872,30 +1002,54 @@ export class BuiltCourse {
             ? this.mats.glassFacade
             : this.mats.distantTowerB;
 
-      const mesh = new THREE.Mesh(towerGeo, mat);
-      mesh.scale.set(tw, th, td);
-      mesh.position.set(tx, botY + th * 0.5, tz);
-      this.group.add(mesh);
+      const list =
+        mat === this.mats.distantTowerA
+          ? towersA
+          : mat === this.mats.glassFacade
+            ? towersG
+            : towersB;
+      pushInst(list, tx, botY + th * 0.5, tz, tw, th, td);
 
-      // Crown penthouse tier on taller towers for unmistakable architectural silhouette
       if (rand() > 0.52) {
         const crownH = 5 + rand() * 11;
-        const crown = new THREE.Mesh(towerGeo, this.mats.whiteConcrete);
-        crown.scale.set(tw * 0.62, crownH, td * 0.62);
-        crown.position.set(tx, topY + crownH * 0.5, tz);
-        this.group.add(crown);
+        pushInst(crowns, tx, topY + crownH * 0.5, tz, tw * 0.62, crownH, td * 0.62);
+        this.skylineTerraces.push({
+          x: tx,
+          topY: topY + crownH,
+          z: tz,
+          w: tw * 0.62,
+          d: td * 0.62,
+        });
 
         if (rand() > 0.55) {
           const spireH = 12 + rand() * 18;
-          const spire = new THREE.Mesh(towerGeo, this.mats.darkSteel);
-          spire.scale.set(0.35, spireH, 0.35);
-          spire.position.set(tx, topY + crownH + spireH * 0.5, tz);
-          this.group.add(spire);
+          pushInst(spires, tx, topY + crownH + spireH * 0.5, tz, 0.35, spireH, 0.35);
         }
       }
 
       placed++;
     }
+
+    const mk = (
+      inst: RawInstance[],
+      material: THREE.Material,
+      maxDist: number,
+      castShadow = false
+    ) => {
+      if (inst.length === 0) return;
+      const batch = new CulledInstancedBatch(towerGeo, material, inst, {
+        castShadow,
+        receiveShadow: false,
+        maxDist,
+      });
+      this.skylineBatches.push(batch);
+      this.group.add(batch.mesh);
+    };
+    mk(towersA, this.mats.distantTowerA, 780);
+    mk(towersG, this.mats.glassFacade, 780);
+    mk(towersB, this.mats.distantTowerB, 780);
+    mk(crowns, this.mats.whiteConcrete, 620);
+    mk(spires, this.mats.darkSteel, 560);
   }
 
   markCheckpointReached(index: number): void {
@@ -917,20 +1071,52 @@ export class BuiltCourse {
   update(
     dt: number,
     lockedGrappleId: string | null,
-    activeGrappleId: string | null
+    activeGrappleId: string | null,
+    culler?: FrustumCuller,
+    foliage: FoliageDensity = 'high',
+    distScale = 1,
+    graphicsLow = false
   ): void {
     this.time += dt;
     const t = this.time;
+    this.bannerTime.value = t;
 
-    // Spin HVAC condenser & turbine launch pad fans
+    if (culler) {
+      for (let i = 0; i < this.staticMeshes.length; i++) {
+        const s = this.staticMeshes[i];
+        s.mesh.visible = culler.isSphereVisible(
+          s.cx,
+          s.cy,
+          s.cz,
+          s.radius + s.shadowPad,
+          s.maxDist * distScale
+        );
+      }
+      for (let i = 0; i < this.skylineBatches.length; i++) {
+        this.skylineBatches[i].cull(culler, distScale, graphicsLow ? 1 : 2);
+      }
+      this.foliage?.update(dt, culler, foliage, distScale);
+    }
+
     for (let i = 0; i < this.fans.length; i++) {
       const f = this.fans[i];
+      if (culler) {
+        const p = f.mesh.getWorldPosition(tmpWorld);
+        if (!culler.isSphereVisible(p.x, p.y, p.z, 2.4, 90 * distScale)) continue;
+      }
       f.mesh.rotation.y += f.speed * dt;
     }
 
-    // Rising updraft rings on launch pads
     for (let i = 0; i < this.launchRings.length; i++) {
       const r = this.launchRings[i];
+      if (culler) {
+        const wp = r.mesh.getWorldPosition(tmpWorld);
+        if (!culler.isSphereVisible(wp.x, wp.y, wp.z, 4, 80 * distScale)) {
+          r.mesh.visible = false;
+          continue;
+        }
+        r.mesh.visible = true;
+      }
       const p = (t * 0.95 + r.phase) % 1;
       r.mesh.position.y = r.baseY + p * 3.1;
       const scale = 1.0 + p * 0.35;
@@ -938,10 +1124,13 @@ export class BuiltCourse {
       (r.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - p) * 0.65;
     }
 
-    // Rotate & pulse grapple skyhooks (snappy scale-up when locked in reticle!)
     for (let i = 0; i < this.grapples.length; i++) {
       const g = this.grapples[i];
       const highlighted = g.id === lockedGrappleId || g.id === activeGrappleId;
+      if (!highlighted && culler) {
+        const wp = g.ring.getWorldPosition(tmpWorld);
+        if (!culler.isSphereVisible(wp.x, wp.y, wp.z, 8, 140 * distScale)) continue;
+      }
       g.ring.rotation.y = t * (highlighted ? 4.2 : 1.4);
       g.core.rotation.y = -t * 2.6;
       g.core.rotation.x = t * 1.5;
@@ -951,26 +1140,27 @@ export class BuiltCourse {
       g.core.scale.setScalar(g.baseScale);
     }
 
-    // Wind-rippling finish arch banners
     for (let i = 0; i < this.banners.length; i++) {
-      const b = this.banners[i];
-      const pos = b.mesh.geometry.attributes.position as THREE.BufferAttribute;
-      const arr = pos.array as Float32Array;
-      const base = b.basePositions;
-      for (let v = 0; v < pos.count; v++) {
-        const y = base[v * 3 + 1];
-        // Top of banner is pinned (y = +2.7), bottom billows freely (y = -2.7)
-        const hang = Math.max(0, (2.7 - y) / 5.4);
-        arr[v * 3 + 2] =
-          Math.sin(t * 5.2 - hang * 4.5 + b.phase) * 0.32 * hang * hang;
-        arr[v * 3] =
-          base[v * 3] + Math.cos(t * 3.4 - hang * 3.0 + b.phase) * 0.08 * hang;
+      if (culler) {
+        const wp = this.banners[i].mesh.getWorldPosition(tmpWorld);
+        this.banners[i].mesh.visible = culler.isSphereVisible(
+          wp.x,
+          wp.y,
+          wp.z,
+          6,
+          160 * distScale
+        );
       }
-      pos.needsUpdate = true;
     }
   }
 
   dispose(): void {
+    this.foliage?.dispose();
+    this.foliage = null;
+    for (const b of this.skylineBatches) {
+      b.mesh.dispose();
+    }
+    this.skylineBatches.length = 0;
     for (const geo of this.disposables) {
       geo.dispose();
     }
@@ -981,3 +1171,6 @@ export class BuiltCourse {
     this.matDisposables.length = 0;
   }
 }
+
+const tmpWorld = new THREE.Vector3();
+

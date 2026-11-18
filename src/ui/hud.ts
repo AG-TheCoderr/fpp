@@ -67,9 +67,17 @@ export class GameUI {
   private hudPromptActEl: HTMLElement | null = null;
   private hudCpEl: HTMLElement | null = null;
   private hudLockEl: HTMLElement | null = null;
+  private hudFpsEl: HTMLElement | null = null;
 
   private splitHideTimer = 0;
   private projVec = new THREE.Vector3();
+  private lastTimer = '';
+  private lastSpd = -1;
+  private lastState = '';
+  private lastCp = '';
+  private fpsAccum = 0;
+  private fpsFrames = 0;
+  private fpsShown = 0;
 
   constructor(
     private root: HTMLElement,
@@ -143,7 +151,30 @@ export class GameUI {
   ): void {
     if (this.screen !== 'playing' || !this.hudTimerEl) return;
 
-    this.hudTimerEl.textContent = formatTime(player.runTime);
+    const timer = formatTime(player.runTime);
+    if (timer !== this.lastTimer) {
+      this.lastTimer = timer;
+      this.hudTimerEl.textContent = timer;
+    }
+
+    if (this.hudFpsEl) {
+      this.fpsAccum += dt;
+      this.fpsFrames++;
+      if (this.fpsAccum >= 0.35) {
+        const fps = Math.round(this.fpsFrames / this.fpsAccum);
+        this.fpsAccum = 0;
+        this.fpsFrames = 0;
+        if (this.settings.showFps) {
+          if (fps !== this.fpsShown) {
+            this.fpsShown = fps;
+            this.hudFpsEl.textContent = `${fps} FPS`;
+          }
+          this.hudFpsEl.style.display = 'block';
+        } else {
+          this.hudFpsEl.style.display = 'none';
+        }
+      }
+    }
 
     // Split toast fade
     if (this.splitHideTimer > 0) {
@@ -155,7 +186,8 @@ export class GameUI {
 
     // Speedometer
     const spd = player.horizSpeed;
-    if (this.hudSpeedValEl) {
+    if (this.hudSpeedValEl && Math.abs(spd - this.lastSpd) > 0.05) {
+      this.lastSpd = spd;
       this.hudSpeedValEl.textContent = spd.toFixed(1);
     }
     if (this.hudSpeedFillEl) {
@@ -167,12 +199,15 @@ export class GameUI {
 
     // Movement state chip (SLIDE / WALL / VAULT / CLIMB / SWING)
     if (this.hudStateEl) {
-      const badge = STATE_BADGE[player.state];
-      if (badge) {
-        this.hudStateEl.textContent = badge;
-        this.hudStateEl.classList.add('is-visible');
-      } else {
-        this.hudStateEl.classList.remove('is-visible');
+      const badge = STATE_BADGE[player.state] ?? '';
+      if (badge !== this.lastState) {
+        this.lastState = badge;
+        if (badge) {
+          this.hudStateEl.textContent = badge;
+          this.hudStateEl.classList.add('is-visible');
+        } else {
+          this.hudStateEl.classList.remove('is-visible');
+        }
       }
     }
 
@@ -183,7 +218,7 @@ export class GameUI {
 
     // Minimal click-to-lock cue only if unlocked
     if (this.hudLockEl) {
-      if (pointerLocked) {
+      if (pointerLocked || document.documentElement.classList.contains('is-touch')) {
         this.hudLockEl.style.display = 'none';
       } else {
         this.hudLockEl.style.display = 'block';
@@ -280,6 +315,7 @@ export class GameUI {
     this.hudPromptActEl = null;
     this.hudCpEl = null;
     this.hudLockEl = null;
+    this.hudFpsEl = null;
   }
 
   private renderTitle(): void {
@@ -394,14 +430,15 @@ export class GameUI {
 
   private renderControls(onBack: () => void, isPause = false): void {
     const pairs: [string, string][] = [
-      ['MOVE', 'W A S D'],
-      ['JUMP / WALL KICK', 'SPACE'],
-      ['SLIDE / BOOST', 'SHIFT / C'],
+      ['MOVE', 'W A S D / STICK'],
+      ['LOOK', 'MOUSE / SWIPE'],
+      ['JUMP / WALL KICK', 'SPACE / JUMP'],
+      ['SLIDE / BOOST', 'SHIFT / SLIDE'],
       ['VAULT / CLIMB', 'AUTO'],
-      ['GRAPPLE', 'RMB / E'],
+      ['GRAPPLE', 'RMB / HOOK'],
       ['RESTART', 'R'],
       ['CHECKPOINT', 'F'],
-      ['PAUSE', 'ESC'],
+      ['PAUSE', 'ESC / II'],
     ];
 
     this.root.innerHTML = `
@@ -469,8 +506,20 @@ export class GameUI {
             <span class="setting-val" id="v-vol">${Math.round(s.volume * 100)}%</span>
           </div>
           <div class="setting-row">
+            <span class="setting-label">GRAPHICS</span>
+            <button class="toggle-btn is-on" id="s-gfx">${s.graphics.toUpperCase()}</button>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">FOLIAGE</span>
+            <button class="toggle-btn is-on" id="s-fol">${s.foliage.toUpperCase()}</button>
+          </div>
+          <div class="setting-row">
             <span class="setting-label">PB GHOST</span>
             <button class="toggle-btn ${s.showGhost ? 'is-on' : ''}" id="s-ghost">${s.showGhost ? 'ON' : 'OFF'}</button>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">FPS</span>
+            <button class="toggle-btn ${s.showFps ? 'is-on' : ''}" id="s-fps">${s.showFps ? 'ON' : 'OFF'}</button>
           </div>
           <button class="danger-btn" id="s-clear">RESET TIMES</button>
         </div>
@@ -518,11 +567,36 @@ export class GameUI {
       this.cb.onSettingsChange(s);
     });
 
+    const gfxBtn = this.root.querySelector<HTMLButtonElement>('#s-gfx')!;
+    gfxBtn.addEventListener('click', () => {
+      s.graphics = s.graphics === 'high' ? 'medium' : s.graphics === 'medium' ? 'low' : 'high';
+      gfxBtn.textContent = s.graphics.toUpperCase();
+      this.cb.onUiSound();
+      this.cb.onSettingsChange(s);
+    });
+
+    const folBtn = this.root.querySelector<HTMLButtonElement>('#s-fol')!;
+    folBtn.addEventListener('click', () => {
+      s.foliage = s.foliage === 'high' ? 'low' : s.foliage === 'low' ? 'off' : 'high';
+      folBtn.textContent = s.foliage.toUpperCase();
+      this.cb.onUiSound();
+      this.cb.onSettingsChange(s);
+    });
+
     const ghostBtn = this.root.querySelector<HTMLButtonElement>('#s-ghost')!;
     ghostBtn.addEventListener('click', () => {
       s.showGhost = !s.showGhost;
       ghostBtn.textContent = s.showGhost ? 'ON' : 'OFF';
       ghostBtn.classList.toggle('is-on', s.showGhost);
+      this.cb.onUiSound();
+      this.cb.onSettingsChange(s);
+    });
+
+    const fpsBtn = this.root.querySelector<HTMLButtonElement>('#s-fps')!;
+    fpsBtn.addEventListener('click', () => {
+      s.showFps = !s.showFps;
+      fpsBtn.textContent = s.showFps ? 'ON' : 'OFF';
+      fpsBtn.classList.toggle('is-on', s.showFps);
       this.cb.onUiSound();
       this.cb.onSettingsChange(s);
     });
@@ -618,6 +692,7 @@ export class GameUI {
         <div class="hud-top">
           <div class="hud-course-tag">${course.code} ${course.name}</div>
           <div class="hud-timer" id="hud-timer">00:00.00</div>
+          <div class="hud-fps" id="hud-fps" style="display:none">0 FPS</div>
           <div class="hud-split" id="hud-split"></div>
         </div>
         <div class="hud-cp" id="hud-cp">0/${course.checkpoints.length}</div>
@@ -655,6 +730,10 @@ export class GameUI {
     this.hudPromptActEl = this.root.querySelector('#hud-pact');
     this.hudCpEl = this.root.querySelector('#hud-cp');
     this.hudLockEl = this.root.querySelector('#hud-lock');
+    this.hudFpsEl = this.root.querySelector('#hud-fps');
+    this.lastTimer = '';
+    this.lastSpd = -1;
+    this.lastState = '';
   }
 
   private renderFinish(sum: FinishSummary): void {
