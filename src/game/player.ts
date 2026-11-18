@@ -13,10 +13,11 @@ export interface PlayerInputState {
 }
 
 export interface PlayerEvents {
-  onFootstep?: (speed: number, isWall: boolean) => void;
+  onFootstep?: (speed: number, isWall: boolean, foot: -1 | 1) => void;
+  onPivot?: (intensity: number) => void;
   onJump?: (boosted: boolean) => void;
   onLand?: (impact: number, intoSlide: boolean) => void;
-  onSlideStart?: (speed: number) => void;
+  onSlideStart?: (speed: number, slopeSlam: boolean) => void;
   onSlideEnd?: () => void;
   onVault?: (spring: boolean) => void;
   onMantle?: () => void;
@@ -35,27 +36,63 @@ export const PLAYER_RADIUS = 0.38;
 export const STAND_HEIGHT = 1.8;
 export const SLIDE_HEIGHT = 0.88;
 export const STAND_EYE = 1.64;
-export const SLIDE_EYE = 0.76;
+export const SLIDE_EYE = 0.74;
 
 const GRAVITY = 24.0;
 const BASE_RUN_SPEED = 11.2;
-const FLOW_RUN_SPEED = 12.6; // Reached after 1.5s of clean uninterrupted sprint
-const GROUND_ACCEL = 62.0;
-const GROUND_FRICTION = 52.0;
-const OVER_SPEED_DRAG = 5.2; // Gentle bleed when running faster than FLOW_RUN_SPEED so boosts carry!
-const AIR_ACCEL = 22.0;
-const AIR_STRAFE_WISH_CAP = 3.2;
+const FLOW_RUN_SPEED = 12.8;   // Smoothly earned while maintaining runner flow
+const CROUCH_SPEED = 5.4;
+
+// Ground traction, friction & corner-carve tuning
+const GROUND_ACCEL = 68.0;     // Punchy forward drive off the line
+const LATERAL_TRACTION = 98.0; // Kills icy sideways slip on diagonal direction cuts
+const COUNTER_ACCEL = 122.0;   // Crisp rubber-on-concrete bite on 180° reversals
+const STOP_FRICTION = 8.8;     // Quake/Titanfall proportional deceleration
+const STOP_CONTROL = 6.8;      // Guarantees snappy final stop with zero float
+const OVER_SPEED_DRAG = 3.0;   // Gentle bleed above FLOW_RUN_SPEED so chained momentum lasts!
+
+// Air physics tuning
+const AIR_ACCEL = 28.0;
+const AIR_STRAFE_CAP = 3.8;
+const AIR_BRAKE_ACCEL = 30.0;
 const JUMP_VEL = 9.5;
 const COYOTE_TIME = 0.14;
-const SLIDE_BOOST_MIN = 15.2;
-const SLIDE_BOOST_ADD = 3.1;
-const SLIDE_MAX_SPEED = 24.5;
-const SLIDE_FLAT_FRICTION = 6.2;
-const SLIDE_MIN_SPEED = 5.4;
+const JUMP_LURCH_WINDOW = 0.18;
+
+// Slide physics tuning (pure momentum + progressive friction + 2D slope gravity)
+const SLIDE_MIN_ENTRY_SPEED = 6.0;
+const SLIDE_EXIT_SPEED = 5.8;
+const SLIDE_BOOST_ADD = 3.5;
+const SLIDE_BOOST_FLOOR = 16.0;
+const SLIDE_RECHARGE_RATE = 1.25; // Full charge in 0.80s — matches one slide-hop arc!
+const SLIDE_MAX_SPEED = 25.8;
+
+// Wall-run & speed ceiling
 const WALLRUN_GRAVITY = 5.2;
 const WALLRUN_MAX_TIME = 1.75;
-const WALLRUN_MIN_SPEED = 14.0;
-const MAX_HORIZ_SPEED = 27.5;
+const WALLRUN_MIN_SPEED = 14.2;
+const MAX_HORIZ_SPEED = 27.8;
+
+/** Rotate 2D vector (dx, dz) toward unit target (tx, tz) by at most maxAngle radians. */
+function rotateToward2D(
+  dx: number,
+  dz: number,
+  tx: number,
+  tz: number,
+  maxAngle: number
+): [number, number] {
+  const dot = Math.max(-1, Math.min(1, dx * tx + dz * tz));
+  const angle = Math.acos(dot);
+  if (angle < 1e-5) return [tx, tz];
+  const cross = dx * tz - dz * tx; // sign of rotation in XZ
+  const step = Math.min(angle, maxAngle) * (cross >= 0 ? 1 : -1);
+  const c = Math.cos(step);
+  const s = Math.sin(step);
+  const nx = dx * c - dz * s;
+  const nz = dx * s + dz * c;
+  const invL = 1 / (Math.hypot(nx, nz) || 1);
+  return [nx * invL, nz * invL];
+}
 
 export class Player {
   // Interpolated previous & current position (feet)
@@ -78,14 +115,26 @@ export class Player {
   crouched = false;
   currentRamp: SolidRamp | null = null;
 
-  // Timers
+  // Core movement timers & momentum state
   coyoteTimer = 0;
-  landingGraceTimer = 0; // Preserves speed for slide-hops / b-hops
-  flowBuild = 0;         // 0..1 gradual runner's momentum
+  landingGraceTimer = 0;
+  justJumpedTimer = 0;
+  airTime = 0;
+  flowBuild = 0;         // 0..1 sustained runner's flow
   slideTimer = 0;
-  slideBoostCooldown = 0;
+  slideCharge = 1.0;     // 0..1 progressive slide-boost capacitor (replaces rigid cooldown!)
+  slideSteer = 0;        // -1..+1 smoothed slide carving direction
+  slideBraking = false;  // true while heel-braking a slide with S
+  groundSlopePitch = 0;  // signed slope angle along facing direction (rad)
+  pivotCooldown = 0;
   launchCooldown = 0;
   grappleCooldown = 0;
+
+  // Real physical G-force / inertia telemetry for the head-bone camera rig
+  localAccelFwd = 0;
+  localAccelRight = 0;
+  localAccelUp = 0;
+  exertion = 0;          // 0..1 drives subtle post-sprint runner breathing
 
   // Wall-run tracking
   wallSide: -1 | 1 = 1;
@@ -117,8 +166,10 @@ export class Player {
   grappleRopeLen = 0;
   grappleTimer = 0;
 
-  // Footstep phase (also drives camera bob + hand swing)
+  // Biomechanical gait phase: 1 full left+right cycle = 2*PI, each footfall = PI
   stridePhase = 0;
+  stepFoot: -1 | 1 = -1;
+  lastStepPulse = 0;     // 1 on footstrike, decays rapidly for crisp skull-bone impact
   private lastStepIndex = 0;
 
   // Course / run progress
@@ -126,14 +177,13 @@ export class Player {
   runFinished = false;
   runTime = 0;
   peakSpeed = 0;
-  checkpointIndex = 0; // Number of checkpoints reached
+  checkpointIndex = 0;
   splits: number[] = [];
   respawnX = 0;
   respawnY = 0;
   respawnZ = 0;
   respawnYaw = 0;
 
-  // Last landing impact for camera dip
   lastLandImpact = 0;
 
   events: PlayerEvents = {};
@@ -174,7 +224,6 @@ export class Player {
       return;
     }
     if (this.checkpointIndex === 0) {
-      // On start segment, checkpoint respawn cleanly restarts timer at 00:00
       this.resetCourse(emitEvent);
       return;
     }
@@ -204,11 +253,22 @@ export class Player {
     this.currentRamp = null;
     this.coyoteTimer = COYOTE_TIME;
     this.landingGraceTimer = 0;
+    this.justJumpedTimer = 0;
+    this.airTime = 0;
     this.flowBuild = 0;
     this.slideTimer = 0;
-    this.slideBoostCooldown = 0;
+    this.slideCharge = 1.0;
+    this.slideSteer = 0;
+    this.slideBraking = false;
+    this.groundSlopePitch = 0;
+    this.pivotCooldown = 0;
     this.launchCooldown = 0;
     this.grappleCooldown = 0;
+    this.localAccelFwd = 0;
+    this.localAccelRight = 0;
+    this.localAccelUp = 0;
+    this.exertion = 0;
+    this.lastStepPulse = 0;
     this.wallId = null;
     this.lastWallId = null;
     this.sameWallCooldown = 0;
@@ -250,6 +310,10 @@ export class Player {
     this.prevZ = this.z;
     this.lastLandImpact = 0;
 
+    const preVx = this.vx;
+    const preVy = this.vy;
+    const preVz = this.vz;
+
     // Post-finish slow-mo coast
     if (this.runFinished) {
       this.stepFinishCoast(dt);
@@ -271,12 +335,24 @@ export class Player {
       this.runTime += dt;
     }
 
-    // Tick cooldowns & buffers
-    this.slideBoostCooldown = Math.max(0, this.slideBoostCooldown - dt);
+    // Tick timers & progressive slide boost recharge (faster while driving footsteps on concrete/walls)
+    if (this.state !== 'slide') {
+      const rechargeMul = this.grounded || this.state === 'wallrun' ? 1.0 : 0.42;
+      this.slideCharge = Math.min(
+        1,
+        this.slideCharge + SLIDE_RECHARGE_RATE * rechargeMul * dt
+      );
+      this.slideSteer += (0 - this.slideSteer) * Math.min(1, 14 * dt);
+      this.slideBraking = false;
+    }
+    this.pivotCooldown = Math.max(0, this.pivotCooldown - dt);
     this.launchCooldown = Math.max(0, this.launchCooldown - dt);
     this.grappleCooldown = Math.max(0, this.grappleCooldown - dt);
     this.sameWallCooldown = Math.max(0, this.sameWallCooldown - dt);
     this.landingGraceTimer = Math.max(0, this.landingGraceTimer - dt);
+    this.justJumpedTimer = Math.max(0, this.justJumpedTimer - dt);
+    this.lastStepPulse = Math.max(0, this.lastStepPulse - dt * 9.5);
+
     if (this.sameWallCooldown <= 0 && this.state !== 'wallrun') {
       this.lastWallId = null;
     }
@@ -284,7 +360,7 @@ export class Player {
     const [lookX, lookY, lookZ] = this.getLookDir();
     const eyeY = this.y + this.eyeHeight;
 
-    // Continuously update best grapple lock candidate for HUD reticle
+    // Update best grapple lock candidate for HUD reticle
     const lockCandidate =
       this.state !== 'grapple' && this.grappleCooldown <= 0
         ? this.world.findBestGrapple(
@@ -332,7 +408,7 @@ export class Player {
         break;
     }
 
-    // Cap extreme horizontal speed for stability
+    // Cap extreme horizontal speed cleanly
     const hs = this.horizSpeed;
     if (hs > MAX_HORIZ_SPEED) {
       const s = MAX_HORIZ_SPEED / hs;
@@ -341,6 +417,38 @@ export class Player {
     }
     if (this.runStarted && this.horizSpeed > this.peakSpeed) {
       this.peakSpeed = this.horizSpeed;
+    }
+
+    // Track current ground slope angle along player's facing direction
+    let targetSlope = 0;
+    if (this.grounded && this.currentRamp) {
+      const [fx, fz] = this.getHorizForward();
+      const upAlign = fx * this.currentRamp.upX + fz * this.currentRamp.upZ;
+      targetSlope = Math.atan(this.currentRamp.slope) * upAlign;
+    }
+    this.groundSlopePitch += (targetSlope - this.groundSlopePitch) * Math.min(1, 14 * dt);
+
+    // Compute smoothed player-local G-force acceleration for physical body/head inertia
+    const invDt = 1 / Math.max(1e-4, dt);
+    const rawAx = (this.vx - preVx) * invDt;
+    const rawAy = (this.vy - preVy) * invDt;
+    const rawAz = (this.vz - preVz) * invDt;
+    const [fx, fz] = this.getHorizForward();
+    const [rx, rz] = this.getHorizRight();
+    const clampA = (v: number) => Math.max(-42, Math.min(42, v));
+    const aFwd = clampA(rawAx * fx + rawAz * fz);
+    const aRight = clampA(rawAx * rx + rawAz * rz);
+    const aUp = clampA(rawAy);
+    const aBlend = Math.min(1, 12 * dt);
+    this.localAccelFwd += (aFwd - this.localAccelFwd) * aBlend;
+    this.localAccelRight += (aRight - this.localAccelRight) * aBlend;
+    this.localAccelUp += (aUp - this.localAccelUp) * aBlend;
+
+    // Update athletic exertion (builds during high-speed runs, settles slowly when resting)
+    if (hs > 8.0) {
+      this.exertion = Math.min(1, this.exertion + dt * 0.22);
+    } else {
+      this.exertion = Math.max(0, this.exertion - dt * 0.14);
     }
 
     // Check launch pads
@@ -352,7 +460,6 @@ export class Player {
           this.activeGrapple = null;
           this.events.onGrappleRelease?.(false);
         }
-        // Carry forward momentum if already faster along pad direction
         const padHoriz = Math.hypot(pad.vx, pad.vz);
         if (padHoriz > 0.1) {
           const pdx = pad.vx / padHoriz;
@@ -367,6 +474,8 @@ export class Player {
         this.crouched = false;
         this.currentRamp = null;
         this.coyoteTimer = 0;
+        this.airTime = 0;
+        this.slideCharge = 1.0;
         this.lastWallId = null;
         this.lastGrappleId = null;
         this.launchCooldown = 0.28;
@@ -379,7 +488,6 @@ export class Player {
     // Check checkpoints
     const cp = this.world.checkCheckpoint(this.x, this.y, this.z, this.checkpointIndex);
     if (cp) {
-      // Fill any skipped intermediate checkpoints (if player took a huge shortcut!)
       while (this.checkpointIndex <= cp.index) {
         this.splits[this.checkpointIndex] = this.runTime;
         this.checkpointIndex++;
@@ -459,149 +567,255 @@ export class Player {
     const [wishX, wishZ, wishMag] = this.getWishDir(input);
     const [fwdX, fwdZ] = this.getHorizForward();
 
-    // Update coyote timer
     if (this.grounded) {
       this.coyoteTimer = COYOTE_TIME;
+      this.airTime = 0;
       this.lastWallId = null;
       this.lastGrappleId = null;
     } else {
       this.coyoteTimer = Math.max(0, this.coyoteTimer - dt);
+      this.airTime += dt;
     }
 
-    // Check if stuck crouched under low obstacle
-    if (this.crouched && this.canStandUp()) {
+    // Handle low-speed crouch vs standing up cleanly
+    const onDownhill = this.isOnDownhillRamp();
+    if (this.grounded) {
+      const hsNow = this.horizSpeed;
+      const wantsSlide =
+        (input.slideBufferTimer > 0 && hsNow >= SLIDE_MIN_ENTRY_SPEED) ||
+        (input.slideHeld && onDownhill && hsNow >= 2.2);
+
+      if (!this.crouched && wantsSlide) {
+        input.slideBufferTimer = 0;
+        this.startSlide(wishX, wishZ, wishMag, 0);
+        this.stepSlide(input, dt);
+        return;
+      }
+
+      // Allow clean tactical crouch at low speed; release immediately when standing up or sprinting out
+      if (input.slideHeld && hsNow < SLIDE_MIN_ENTRY_SPEED && !onDownhill) {
+        this.crouched = true;
+      } else if (this.crouched && (!input.slideHeld || input.forward > 0.3) && this.canStandUp()) {
+        this.crouched = false;
+      }
+    } else if (this.crouched && this.canStandUp()) {
       this.crouched = false;
     }
 
-    // Initiate slide on ground if requested
-    if (
-      this.grounded &&
-      !this.crouched &&
-      (input.slideBufferTimer > 0 || (input.slideHeld && this.isOnDownhillRamp())) &&
-      this.horizSpeed > 6.2
-    ) {
-      input.slideBufferTimer = 0;
-      this.startSlide();
-      this.stepSlide(input, dt);
-      return;
-    }
-
-    // Ground vs Air acceleration
+    // =======================================================================
+    // GROUND TRACTION, COUNTER-STRAFE, FRICTION & MOMENTUM CARVING
+    // =======================================================================
     let jumpedThisStep = false;
     if (this.grounded) {
       const hs = this.horizSpeed;
 
       if (wishMag > 0.05) {
-        // Build runner flow while sprinting forward
-        if (input.forward > 0.3 && hs > 8.5) {
-          this.flowBuild = Math.min(1, this.flowBuild + dt * 0.65);
+        const align = hs > 0.4 ? (this.vx * wishX + this.vz * wishZ) / hs : 1.0;
+
+        // Build sustained runner's flow while moving forward smoothly
+        if (input.forward > 0.25 && align > 0.4 && hs > 8.0 && !this.crouched) {
+          this.flowBuild = Math.min(1, this.flowBuild + dt * 0.72);
+        } else if (align < -0.2) {
+          // Retain partial kinetic tension through a sharp reversal so re-acceleration pops
+          this.flowBuild *= Math.max(0, 1 - dt * 3.2);
         }
+
         const targetSpeed = this.crouched
-          ? 6.0
+          ? CROUCH_SPEED
           : BASE_RUN_SPEED + (FLOW_RUN_SPEED - BASE_RUN_SPEED) * this.flowBuild;
 
-        // If carrying momentum above targetSpeed, bleed gently instead of hard-clamping!
-        if (hs > targetSpeed + 0.2) {
-          const drag = this.landingGraceTimer > 0 ? OVER_SPEED_DRAG * 0.25 : OVER_SPEED_DRAG;
-          const kept = Math.max(targetSpeed, hs - drag * dt);
-          // Smoothly steer velocity toward wishDir while preserving high speed
-          const curDx = this.vx / hs;
-          const curDz = this.vz / hs;
-          const turnRate = Math.min(1, 7.5 * dt);
-          let ndx = curDx + (wishX - curDx) * turnRate;
-          let ndz = curDz + (wishZ - curDz) * turnRate;
-          const nl = Math.hypot(ndx, ndz) || 1;
-          ndx /= nl;
-          ndz /= nl;
-          this.vx = ndx * kept;
-          this.vz = ndz * kept;
-        } else {
-          // Crisp acceleration toward targetSpeed * wishDir
-          const goalVx = wishX * targetSpeed;
-          const goalVz = wishZ * targetSpeed;
-          const dvx = goalVx - this.vx;
-          const dvz = goalVz - this.vz;
-          const dLen = Math.hypot(dvx, dvz);
-          const maxDelta = GROUND_ACCEL * dt;
-          if (dLen <= maxDelta) {
-            this.vx = goalVx;
-            this.vz = goalVz;
-          } else {
-            this.vx += (dvx / dLen) * maxDelta;
-            this.vz += (dvz / dLen) * maxDelta;
+        if (align < -0.15 && hs > 1.2) {
+          // 1) SHARP DIRECTION REVERSAL: High-grip sneaker counter-plant!
+          if (hs > 8.0 && align < -0.45 && this.pivotCooldown <= 0) {
+            this.pivotCooldown = 0.3;
+            this.events.onPivot?.(Math.min(1, hs / 16));
           }
+          // Decompose velocity along & perpendicular to wish direction
+          const along = this.vx * wishX + this.vz * wishZ; // negative
+          const perpX = this.vx - wishX * along;
+          const perpZ = this.vz - wishZ * along;
+          const perpLen = Math.hypot(perpX, perpZ);
+
+          const nextAlong = Math.min(targetSpeed, along + COUNTER_ACCEL * dt);
+          const nextPerp = Math.max(0, perpLen - LATERAL_TRACTION * dt);
+          const scaleP = perpLen > 1e-4 ? nextPerp / perpLen : 0;
+
+          this.vx = wishX * nextAlong + perpX * scaleP;
+          this.vz = wishZ * nextAlong + perpZ * scaleP;
+        } else if (hs > targetSpeed + 0.15 && !this.crouched) {
+          // 2) OVER-SPEED MOMENTUM CARRY & CORNER CARVING:
+          // Smooth arcs (< ~42°) conserve nearly 100% speed; tight 60–100° cuts bleed realistic edge friction!
+          const graceScale = this.landingGraceTimer > 0 ? 0.2 : 1.0;
+          const cutFriction = Math.max(0, 0.74 - align) * 10.5;
+          const totalDrag = OVER_SPEED_DRAG * graceScale + cutFriction;
+          const keptSpeed = Math.max(targetSpeed, hs - totalDrag * dt);
+
+          // Exact arc-preserving rotation (feels weighty at 24 m/s, razor-sharp at 13–17 m/s!)
+          const speedRatio = Math.max(0, Math.min(1, (hs - 12.0) / 13.0));
+          const carveRate = 12.8 - speedRatio * 4.4;
+          const [ndx, ndz] = rotateToward2D(
+            this.vx / hs,
+            this.vz / hs,
+            wishX,
+            wishZ,
+            carveRate * dt
+          );
+          this.vx = ndx * keptSpeed;
+          this.vz = ndz * keptSpeed;
+        } else {
+          // 3) RESPONSIVE ACCELERATION + HIGH LATERAL SHOE TRACTION (zero icy diagonal drift!)
+          const along = this.vx * wishX + this.vz * wishZ;
+          const perpX = this.vx - wishX * along;
+          const perpZ = this.vz - wishZ * along;
+          const perpLen = Math.hypot(perpX, perpZ);
+
+          // Kill unwanted sideways skid rapidly while driving cleanly toward targetSpeed
+          const nextPerp = Math.max(0, perpLen - LATERAL_TRACTION * dt);
+          const pScale = perpLen > 1e-4 ? nextPerp / perpLen : 0;
+
+          // Snappier low-end launch off a standstill, smooth athletic climb to top stride
+          const launchBoost = along < 5.5 ? 1.22 : 1.0;
+          const accel = GROUND_ACCEL * launchBoost * dt;
+          let nextAlong = along;
+          if (along < targetSpeed) {
+            nextAlong = Math.min(targetSpeed, along + accel);
+          } else {
+            nextAlong = Math.max(targetSpeed, along - STOP_FRICTION * 4.5 * dt);
+          }
+
+          this.vx = wishX * nextAlong + perpX * pScale;
+          this.vz = wishZ * nextAlong + perpZ * pScale;
         }
       } else {
-        // Snappy stop
-        this.flowBuild = Math.max(0, this.flowBuild - dt * 2.5);
-        if (hs <= GROUND_FRICTION * dt) {
+        // 4) PROPORTIONAL KINETIC GROUND FRICTION (crisp athletic stop, zero ice creep!)
+        this.flowBuild = Math.max(0, this.flowBuild - dt * 2.4);
+        if (hs < 0.35) {
           this.vx = 0;
           this.vz = 0;
         } else {
-          const drop = (hs - GROUND_FRICTION * dt) / hs;
-          this.vx *= drop;
-          this.vz *= drop;
+          const graceScale = this.landingGraceTimer > 0 ? 0.38 : 1.0;
+          const control = Math.max(hs, STOP_CONTROL);
+          const drop = control * STOP_FRICTION * graceScale * dt;
+          const nextHs = Math.max(0, hs - drop);
+          const scale = nextHs / hs;
+          this.vx *= scale;
+          this.vz *= scale;
         }
       }
 
-      // Subtle natural downhill boost even while running
+      // Organic slope stride coupling (natural gravity pull running down ramps)
       if (this.currentRamp) {
-        const downDot = -(this.vx * this.currentRamp.upX + this.vz * this.currentRamp.upZ);
-        if (downDot > 3.0) {
-          const add = this.currentRamp.slope * 7.5 * dt;
-          this.vx -= this.currentRamp.upX * add;
-          this.vz -= this.currentRamp.upZ * add;
+        const upVel = this.vx * this.currentRamp.upX + this.vz * this.currentRamp.upZ;
+        if (upVel < -2.0) {
+          const downAccel = this.currentRamp.slope * 9.2 * dt;
+          this.vx -= this.currentRamp.upX * downAccel;
+          this.vz -= this.currentRamp.upZ * downAccel;
         }
       }
     } else {
-      // Air movement: responsive forward/air control + Quake-style air-strafe preserves all speed
+      // =====================================================================
+      // AIR CONTROL: TAP-STRAFE LURCH + SMOOTH AIR-CARVE + SOURCE AIR-STRAFE
+      // =====================================================================
+      const hs = this.horizSpeed;
+
       if (wishMag > 0.05) {
-        const curProj = this.vx * wishX + this.vz * wishZ;
-        const maxWish =
-          this.horizSpeed > BASE_RUN_SPEED ? AIR_STRAFE_WISH_CAP + 4.5 : BASE_RUN_SPEED;
-        const addSpeed = maxWish - curProj;
-        if (addSpeed > 0) {
-          const accelSpeed = Math.min(addSpeed, AIR_ACCEL * dt);
-          this.vx += wishX * accelSpeed;
-          this.vz += wishZ * accelSpeed;
+        const align = hs > 0.5 ? (this.vx * wishX + this.vz * wishZ) / hs : 1.0;
+
+        // 1) Post-jump directional lurch (lets you redirect cleanly right off a jump/slide-hop!)
+        if (this.justJumpedTimer > 0 && hs > 5.0 && align > -0.25 && align < 0.995) {
+          const lurchStrength = (this.justJumpedTimer / JUMP_LURCH_WINDOW) * 6.4;
+          const [ndx, ndz] = rotateToward2D(
+            this.vx / hs,
+            this.vz / hs,
+            wishX,
+            wishZ,
+            lurchStrength * dt
+          );
+          this.vx = ndx * hs;
+          this.vz = ndz * hs;
+        } else if (align > 0.32 && align < 0.998 && hs > 6.5) {
+          // 2) Smooth mid-air momentum carve (curve into wall-runs & corners without losing speed!)
+          const [ndx, ndz] = rotateToward2D(
+            this.vx / hs,
+            this.vz / hs,
+            wishX,
+            wishZ,
+            2.35 * dt
+          );
+          this.vx = ndx * hs;
+          this.vz = ndz * hs;
         }
-        // Slight gentle air redirect when moving slower so ledge adjustments feel crisp
-        if (this.horizSpeed < BASE_RUN_SPEED * 1.05) {
-          this.vx += (wishX * BASE_RUN_SPEED - this.vx) * Math.min(1, 2.2 * dt);
-          this.vz += (wishZ * BASE_RUN_SPEED - this.vz) * Math.min(1, 2.2 * dt);
+
+        // 3) Crisp air-braking when pulling against flight direction (stick pinpoint landings!)
+        if (align < -0.3) {
+          this.vx += wishX * AIR_BRAKE_ACCEL * dt;
+          this.vz += wishZ * AIR_BRAKE_ACCEL * dt;
+        } else {
+          // 4) True Source/Titanfall air-strafe acceleration (smooth strafing builds speed!)
+          const curProj = this.vx * wishX + this.vz * wishZ;
+          const maxWish = hs > BASE_RUN_SPEED ? AIR_STRAFE_CAP : BASE_RUN_SPEED;
+          const addSpeed = maxWish - curProj;
+          if (addSpeed > 0) {
+            const accelSpeed = Math.min(addSpeed, AIR_ACCEL * dt);
+            this.vx += wishX * accelSpeed;
+            this.vz += wishZ * accelSpeed;
+          }
+          // Gentle precision air-steer at low speeds
+          if (hs < BASE_RUN_SPEED * 0.95) {
+            const blend = Math.min(1, 2.6 * dt);
+            this.vx += (wishX * BASE_RUN_SPEED - this.vx) * blend;
+            this.vz += (wishZ * BASE_RUN_SPEED - this.vz) * blend;
+          }
         }
+      } else if (hs > 0.2) {
+        // Whisper-light aerodynamic air drag only when completely hands-off
+        const keep = Math.max(0, 1 - 0.18 * dt);
+        this.vx *= keep;
+        this.vz *= keep;
       }
+
       this.vy -= GRAVITY * dt;
       if (this.vy < -38) this.vy = -38;
     }
 
-    // Jump (with coyote time + jump buffer!)
-    if (input.jumpBufferTimer > 0 && this.coyoteTimer > 0 && !this.crouched) {
-      input.jumpBufferTimer = 0;
-      this.coyoteTimer = 0;
-      let jumpVy = JUMP_VEL;
-      // Jumping off a red upward ramp stacks ramp lift cleanly!
-      let boosted = false;
-      if (this.currentRamp) {
-        const upSpd = this.vx * this.currentRamp.upX + this.vz * this.currentRamp.upZ;
-        if (upSpd > 4.0) {
-          jumpVy += Math.min(4.2, upSpd * this.currentRamp.slope * 0.65);
-          if (this.currentRamp.style === 'rampRed') {
-            this.vx += this.currentRamp.upX * 1.8;
-            this.vz += this.currentRamp.upZ * 1.8;
-            boosted = true;
-            this.events.onFovPunch?.(4.0);
+    // Jump (with coyote time + input buffer!)
+    if (input.jumpBufferTimer > 0 && this.coyoteTimer > 0) {
+      if (!this.crouched || this.canStandUp()) {
+        this.crouched = false;
+        input.jumpBufferTimer = 0;
+        this.coyoteTimer = 0;
+        this.justJumpedTimer = JUMP_LURCH_WINDOW;
+
+        let jumpVy = JUMP_VEL;
+        let boosted = false;
+        if (this.currentRamp) {
+          const upSpd = this.vx * this.currentRamp.upX + this.vz * this.currentRamp.upZ;
+          if (upSpd > 4.0) {
+            jumpVy += Math.min(4.2, upSpd * this.currentRamp.slope * 0.65);
+            if (this.currentRamp.style === 'rampRed') {
+              this.vx += this.currentRamp.upX * 2.0;
+              this.vz += this.currentRamp.upZ * 2.0;
+              boosted = true;
+              this.events.onFovPunch?.(4.2);
+            }
           }
         }
+
+        // Subtle forward jump impulse if jumping into wish direction at sprint
+        if (wishMag > 0.5 && this.horizSpeed >= BASE_RUN_SPEED * 0.9 && this.horizSpeed < 13.5) {
+          this.vx += wishX * 0.55;
+          this.vz += wishZ * 0.55;
+        }
+
+        this.vy = jumpVy;
+        this.grounded = false;
+        this.currentRamp = null;
+        jumpedThisStep = true;
+        this.events.onJump?.(boosted || this.horizSpeed > 14.0);
       }
-      this.vy = jumpVy;
-      this.grounded = false;
-      this.currentRamp = null;
-      jumpedThisStep = true;
-      this.events.onJump?.(boosted || this.horizSpeed > 14.0);
     }
 
-    // Move & collide
+    // Swept collision move
     const wasGrounded = this.grounded;
     const prevRamp = this.currentRamp;
     const h = this.crouched ? SLIDE_HEIGHT : STAND_HEIGHT;
@@ -630,31 +844,39 @@ export class Player {
     this.currentRamp = res.onRamp;
 
     if (res.leftRedRamp) {
+      this.justJumpedTimer = JUMP_LURCH_WINDOW * 0.7;
       this.events.onJump?.(true);
       this.events.onFovPunch?.(4.5);
     }
 
-    // Handle landing!
+    // Handle touchdown + landing-slide + downhill slope-slam!
     if (!wasGrounded && this.grounded) {
-      this.landingGraceTimer = 0.14;
+      this.landingGraceTimer = 0.15;
       this.lastLandImpact = res.landedImpact;
 
-      // Landing-slide! If holding Shift/C (or buffered slide) on landing with speed -> instant smooth slide!
-      const wantsSlide =
+      const wantsLandSlide =
         (input.slideHeld || input.slideBufferTimer > 0) &&
-        (this.horizSpeed > 6.0 || this.isOnDownhillRamp());
-      if (wantsSlide) {
+        (this.horizSpeed > 5.2 || this.isOnDownhillRamp());
+
+      if (wantsLandSlide) {
         input.slideBufferTimer = 0;
         this.events.onLand?.(res.landedImpact, true);
-        this.startSlide();
+        this.startSlide(wishX, wishZ, wishMag, res.landedImpact);
         return;
       }
-      if (res.landedImpact > 2.2) {
+
+      // Very heavy flat drops without sliding momentarily soak a touch of stride (rewards slide-landing!)
+      if (res.landedImpact > 17.5 && this.horizSpeed > 8.0) {
+        this.vx *= 0.88;
+        this.vz *= 0.88;
+      }
+
+      if (res.landedImpact > 2.0) {
         this.events.onLand?.(res.landedImpact, false);
       }
     }
 
-    // Check auto-vault & auto-mantle when pressing forward
+    // Check auto-vault & auto-mantle when moving forward
     if (input.forward > 0.2 && !this.crouched) {
       const probeDirX = wishMag > 0.2 ? wishX : fwdX;
       const probeDirZ = wishMag > 0.2 ? wishZ : fwdZ;
@@ -680,7 +902,7 @@ export class Player {
       }
     }
 
-    // Check wall-run initiation when airborne!
+    // Check wall-run initiation when airborne
     if (!this.grounded && input.forward > 0.1 && this.horizSpeed > 6.2 && this.vy < 8.8) {
       const exclude = this.sameWallCooldown > 0 ? this.lastWallId : null;
       const wall = this.world.findWallRunCandidate(
@@ -698,18 +920,19 @@ export class Player {
       }
     }
 
-    // Update state & footstep rhythm
+    // Update gait cycle & exact left/right footstrike events
     if (this.grounded) {
       const hs = this.horizSpeed;
-      if (hs > 0.8) {
+      if (hs > 0.65) {
         this.state = 'run';
-        // ~2.85 steps/sec at 11 m/s, faster at higher speeds
-        const stepRate = 1.9 + hs * 0.115;
-        this.stridePhase += dt * stepRate * Math.PI;
+        const cadence = this.crouched ? 1.5 + hs * 0.14 : 1.85 + Math.min(hs, 22) * 0.112;
+        this.stridePhase += dt * cadence * Math.PI;
         const stepIdx = Math.floor(this.stridePhase / Math.PI);
         if (stepIdx !== this.lastStepIndex) {
           this.lastStepIndex = stepIdx;
-          this.events.onFootstep?.(hs, false);
+          this.stepFoot = stepIdx % 2 === 0 ? -1 : 1;
+          this.lastStepPulse = 1.0;
+          this.events.onFootstep?.(hs, false, this.stepFoot);
         }
       } else {
         this.state = 'idle';
@@ -723,7 +946,7 @@ export class Player {
     if (!this.currentRamp) return false;
     const [fx, fz] = this.getHorizForward();
     const downDot = -(fx * this.currentRamp.upX + fz * this.currentRamp.upZ);
-    return downDot > 0.45 && this.currentRamp.slope > 0.1;
+    return downDot > 0.4 && this.currentRamp.slope > 0.09;
   }
 
   private canStandUp(): boolean {
@@ -736,99 +959,201 @@ export class Player {
     );
   }
 
-  private startSlide(): void {
+  private startSlide(
+    wishX: number,
+    wishZ: number,
+    wishMag: number,
+    landImpact: number
+  ): void {
     this.state = 'slide';
     this.crouched = true;
     this.slideTimer = 0;
+    this.slideBraking = false;
 
     const hs = this.horizSpeed;
     const [fx, fz] = this.getHorizForward();
-    const dirX = hs > 2.0 ? this.vx / hs : fx;
-    const dirZ = hs > 2.0 ? this.vz / hs : fz;
 
+    // Blend current velocity with wish direction so you can whip-slide crisply into an angle!
+    let dirX = hs > 1.5 ? this.vx / hs : fx;
+    let dirZ = hs > 1.5 ? this.vz / hs : fz;
+    if (wishMag > 0.25) {
+      const dot = dirX * wishX + dirZ * wishZ;
+      if (dot > -0.1) {
+        [dirX, dirZ] = rotateToward2D(dirX, dirZ, wishX, wishZ, 0.46);
+      }
+    }
+
+    // Progressive charge-scaled impulse (rewards rhythmic slide-hops, never rewards spam!)
+    const charge = this.slideCharge;
     let newSpeed = hs;
-    if (this.slideBoostCooldown <= 0) {
-      newSpeed = Math.min(SLIDE_MAX_SPEED, Math.max(SLIDE_BOOST_MIN, hs + SLIDE_BOOST_ADD));
-      this.slideBoostCooldown = 0.52;
-      this.events.onFovPunch?.(3.8);
-    } else {
-      newSpeed = Math.max(hs, 11.5);
+    if (charge >= 0.22) {
+      const boostFloor = 11.8 + (SLIDE_BOOST_FLOOR - 11.8) * charge;
+      const boostAdd = SLIDE_BOOST_ADD * charge;
+      newSpeed = Math.min(SLIDE_MAX_SPEED, Math.max(boostFloor, hs + boostAdd));
+      this.slideCharge = 0;
+      this.events.onFovPunch?.(2.2 + 2.2 * charge);
+    }
+
+    // Downhill Slope-Slam & Impact Breakfall energy conversion!
+    let slopeSlam = false;
+    if (landImpact > 2.5) {
+      if (this.currentRamp) {
+        const downX = -this.currentRamp.upX;
+        const downZ = -this.currentRamp.upZ;
+        const downAlign = dirX * downX + dirZ * downZ;
+        if (downAlign > 0.25) {
+          // Convert vertical fall momentum straight into blistering downhill slide speed!
+          const slamBonus = Math.min(
+            6.8,
+            landImpact * this.currentRamp.slope * 1.35 * downAlign
+          );
+          newSpeed = Math.min(SLIDE_MAX_SPEED, newSpeed + slamBonus);
+          [dirX, dirZ] = rotateToward2D(dirX, dirZ, downX, downZ, 0.35);
+          if (slamBonus > 1.8) {
+            slopeSlam = true;
+            this.events.onFovPunch?.(Math.min(5.0, slamBonus * 0.9));
+          }
+        }
+      } else {
+        // Parkour breakfall roll-slide cushions heavy flat landing into forward glide
+        const rollBonus = Math.min(2.2, Math.max(0, (landImpact - 5.0) * 0.2));
+        newSpeed = Math.min(SLIDE_MAX_SPEED, newSpeed + rollBonus);
+      }
     }
 
     this.vx = dirX * newSpeed;
     this.vz = dirZ * newSpeed;
-    this.events.onSlideStart?.(newSpeed);
+    this.flowBuild = 1;
+    this.events.onSlideStart?.(newSpeed, slopeSlam);
   }
 
   private stepSlide(input: PlayerInputState, dt: number): void {
     this.slideTimer += dt;
-    const hs = this.horizSpeed;
+    this.slideBraking = input.forward < -0.25;
 
-    // Gentle lateral steering during slide
-    if (hs > 1.0 && Math.abs(input.right) > 0.05) {
-      const [rx, rz] = this.getHorizRight();
-      const steer = input.right * 7.5 * dt;
-      let ndx = this.vx + rx * steer;
-      let ndz = this.vz + rz * steer;
-      const nl = Math.hypot(ndx, ndz) || 1;
-      this.vx = (ndx / nl) * hs;
-      this.vz = (ndz / nl) * hs;
+    // Smoothly track A/D carve input for body/camera banking
+    this.slideSteer += (input.right - this.slideSteer) * Math.min(1, 11 * dt);
+
+    // 1. Carve steering: responsive A/D hip-carve + subtle look-direction follow
+    let hs = this.horizSpeed;
+    if (hs > 0.8) {
+      let dx = this.vx / hs;
+      let dz = this.vz / hs;
+
+      if (Math.abs(input.right) > 0.04) {
+        // Faster slides have wider, weightier carve arcs; mid-speed slides carve tightly
+        const steerRate = Math.max(1.35, Math.min(2.25, 2.4 - hs * 0.035));
+        const angle = -input.right * steerRate * dt;
+        // Rotate horizontal vector right when input.right > 0: right = (-dz, dx)
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        const ndx = dx * c + dz * s;
+        const ndz = -dx * s + dz * c;
+        dx = ndx;
+        dz = ndz;
+      }
+
+      // Gentle camera-look alignment when holding W so steering down chutes feels intuitive
+      if (input.forward > 0.2) {
+        const [fx, fz] = this.getHorizForward();
+        const fDot = dx * fx + dz * fz;
+        if (fDot > 0.45) {
+          [dx, dz] = rotateToward2D(dx, dz, fx, fz, 0.95 * dt);
+        }
+      }
+
+      this.vx = dx * hs;
+      this.vz = dz * hs;
     }
 
-    // Slope physics: accelerate downhill, decelerate uphill, smooth friction on flat!
-    let onDownSlope = false;
+    // 2. True 2D slope gravity projection (curves diagonally & rockets straight downhill!)
+    let downhillFactor = 0;
     if (this.currentRamp) {
-      const upDot = this.vx * this.currentRamp.upX + this.vz * this.currentRamp.upZ;
-      const slopeAccel = GRAVITY * this.currentRamp.slope * 0.72;
-      if (upDot < -1.0) {
-        // Sliding DOWNHILL — build thrilling speed!
-        onDownSlope = true;
-        this.vx -= this.currentRamp.upX * slopeAccel * dt;
-        this.vz -= this.currentRamp.upZ * slopeAccel * dt;
-        const curS = this.horizSpeed;
-        if (curS > SLIDE_MAX_SPEED) {
-          this.vx = (this.vx / curS) * SLIDE_MAX_SPEED;
-          this.vz = (this.vz / curS) * SLIDE_MAX_SPEED;
-        }
-      } else {
-        // Sliding uphill decelerates faster
-        const decel = (SLIDE_FLAT_FRICTION + slopeAccel * 0.7) * dt;
-        const nextS = Math.max(0, hs - decel);
-        if (hs > 0.01) {
-          this.vx = (this.vx / hs) * nextS;
-          this.vz = (this.vz / hs) * nextS;
-        }
+      const r = this.currentRamp;
+      const sinTheta = r.slope / Math.hypot(1, r.slope);
+      const gravMag = GRAVITY * sinTheta * 0.92;
+      const downX = -r.upX;
+      const downZ = -r.upZ;
+
+      this.vx += downX * gravMag * dt;
+      this.vz += downZ * gravMag * dt;
+
+      hs = this.horizSpeed;
+      if (hs > 0.5) {
+        downhillFactor = Math.max(0, (this.vx * downX + this.vz * downZ) / hs);
       }
-    } else {
-      // Flat slide: first 0.22s holds boost nearly frictionless so ducking barriers feels slick!
-      const fric = this.slideTimer < 0.22 ? SLIDE_FLAT_FRICTION * 0.3 : SLIDE_FLAT_FRICTION;
-      const nextS = Math.max(0, hs - fric * dt);
-      if (hs > 0.01) {
-        this.vx = (this.vx / hs) * nextS;
-        this.vz = (this.vz / hs) * nextS;
+      if (hs > SLIDE_MAX_SPEED) {
+        this.vx = (this.vx / hs) * SLIDE_MAX_SPEED;
+        this.vz = (this.vz / hs) * SLIDE_MAX_SPEED;
+        hs = SLIDE_MAX_SPEED;
       }
     }
 
-    // Slide-Hop! Pressing Space during slide with headroom pops you out carrying full momentum!
+    // 3. Progressive 3-phase kinetic friction + carve edge drag + S heel-brake!
+    hs = this.horizSpeed;
+    if (hs > 0.01) {
+      let fric: number;
+      if (this.slideTimer < 0.18) {
+        // Slick entry wax phase — burst pops immediately!
+        fric = 1.5;
+      } else if (hs > 10.5) {
+        // Smooth kinetic + aerodynamic glide at high velocity
+        fric = 4.0 + (hs - 10.5) * 0.16;
+      } else {
+        // Progressive shoe-sole bite as slide winds down
+        fric = 4.0 + (10.5 - hs) * 0.72;
+      }
+
+      // Carving digs the shoe edge in slightly
+      fric += Math.abs(input.right) * 1.4;
+
+      // Downhill concrete chutes stay silky fast
+      if (downhillFactor > 0.35 && !this.slideBraking) {
+        fric *= 1 - downhillFactor * 0.62;
+      }
+
+      // Active heel-brake when pulling S
+      if (this.slideBraking) {
+        fric += 16.5;
+      }
+
+      const nextS = Math.max(0, hs - fric * dt);
+      this.vx = (this.vx / hs) * nextS;
+      this.vz = (this.vz / hs) * nextS;
+    }
+
+    // 4. Slide-Hop! Carries full momentum + sweet-spot toe-pop + clean directional lurch!
     let slideJumped = false;
     if (input.jumpBufferTimer > 0 && this.canStandUp()) {
       input.jumpBufferTimer = 0;
-      this.vy = JUMP_VEL * 0.97;
+      this.vy = JUMP_VEL * 0.98;
+      this.justJumpedTimer = JUMP_LURCH_WINDOW;
+
       const curS = this.horizSpeed;
-      if (curS > 8.0 && curS < SLIDE_MAX_SPEED) {
-        const boosted = Math.min(SLIDE_MAX_SPEED, curS + 0.8);
-        this.vx = (this.vx / curS) * boosted;
-        this.vz = (this.vz / curS) * boosted;
+      if (curS > 2.0) {
+        let jdx = this.vx / curS;
+        let jdz = this.vz / curS;
+        const [wx, wz, wm] = this.getWishDir(input);
+        if (wm > 0.25 && jdx * wx + jdz * wz > 0.1) {
+          [jdx, jdz] = rotateToward2D(jdx, jdz, wx, wz, 0.34);
+        }
+        // Sweet-spot slide-hop pop in first 0.6s of slide
+        const sweetBonus = this.slideTimer <= 0.6 && curS > 9.0 ? 1.05 : 0.45;
+        const boosted = Math.min(SLIDE_MAX_SPEED, curS + sweetBonus);
+        this.vx = jdx * boosted;
+        this.vz = jdz * boosted;
       }
+
       this.grounded = false;
       this.crouched = false;
       this.currentRamp = null;
       this.coyoteTimer = 0;
+      this.airTime = 0;
       this.state = 'air';
       slideJumped = true;
       this.events.onSlideEnd?.();
       this.events.onJump?.(true);
-      this.events.onFovPunch?.(2.8);
+      this.events.onFovPunch?.(3.0);
     }
 
     if (!this.grounded) {
@@ -863,30 +1188,34 @@ export class Player {
 
     const canStand = this.canStandUp();
 
-    // If trapped under a low barrier and slowed down, keep a minimum crawl-slide push so player never gets stuck!
-    if (!canStand && this.horizSpeed < 8.5) {
+    // Never trap player beneath a low slide gate even if they braked mid-tunnel
+    if (!canStand && this.horizSpeed < 8.6) {
       const [fx, fz] = this.getHorizForward();
-      const dx = this.horizSpeed > 0.5 ? this.vx / this.horizSpeed : fx;
-      const dz = this.horizSpeed > 0.5 ? this.vz / this.horizSpeed : fz;
-      this.vx = dx * 8.5;
-      this.vz = dz * 8.5;
+      const curS = this.horizSpeed;
+      const dx = curS > 0.5 ? this.vx / curS : fx;
+      const dz = curS > 0.5 ? this.vz / curS : fz;
+      this.vx = dx * 8.6;
+      this.vz = dz * 8.6;
     }
 
-    // End slide conditions: slid off a ledge, released key (after min 0.28s), or slowed down on flat
-    const releasedSlide = !input.slideHeld && this.slideTimer >= 0.30;
-    const expiredFlat = !onDownSlope && this.slideTimer >= 1.15 && canStand;
-    const tooSlow = this.horizSpeed < SLIDE_MIN_SPEED && canStand;
+    // 5. Pure momentum-based slide exit + crisp slide-cancel (no arbitrary timer cutoff!)
+    const slideCanceled = !input.slideHeld && this.slideTimer >= 0.17;
+    const momentumSpent =
+      downhillFactor < 0.3 && this.slideTimer >= 0.25 && this.horizSpeed < SLIDE_EXIT_SPEED;
 
     if (!this.grounded) {
-      // Slid right off a rooftop lip — give generous coyote time so slide-off jumps feel amazing!
-      this.coyoteTimer = COYOTE_TIME + 0.04;
+      // Slid right off a rooftop ledge — extra forgiving coyote window for ledge slide-hops!
+      this.coyoteTimer = COYOTE_TIME + 0.05;
+      this.airTime = 0;
       this.crouched = !canStand;
       this.state = 'air';
       this.events.onSlideEnd?.();
-    } else if ((releasedSlide || expiredFlat || tooSlow) && canStand) {
-      this.crouched = false;
-      this.landingGraceTimer = 0.1;
-      this.state = 'run';
+    } else if ((slideCanceled || momentumSpent) && canStand) {
+      // If player spent their slide while still holding crouch & NOT pushing W, settle into crouch
+      const stayCrouched = momentumSpent && input.slideHeld && input.forward <= 0.2;
+      this.crouched = stayCrouched;
+      this.landingGraceTimer = 0.14; // Carry 100% of remaining slide speed into sprint!
+      this.state = this.horizSpeed > 0.65 ? 'run' : 'idle';
       this.events.onSlideEnd?.();
     }
   }
@@ -909,8 +1238,8 @@ export class Player {
     this.vaultDirZ = dirZ;
     this.vaultSpringUsed = spring;
 
-    const baseBoost = spring ? 16.4 : 15.0;
-    const addBoost = spring ? 3.2 : 2.2;
+    const baseBoost = spring ? 16.6 : 15.2;
+    const addBoost = spring ? 3.3 : 2.3;
     this.vaultSpeed = Math.min(SLIDE_MAX_SPEED, Math.max(baseBoost, this.horizSpeed + addBoost));
     this.vx = dirX * this.vaultSpeed;
     this.vz = dirZ * this.vaultSpeed;
@@ -918,6 +1247,7 @@ export class Player {
     this.grounded = false;
     this.currentRamp = null;
     this.flowBuild = 1;
+    this.slideCharge = Math.min(1, this.slideCharge + 0.5);
 
     this.events.onVault?.(spring);
     this.events.onFovPunch?.(spring ? 5.2 : 3.6);
@@ -927,7 +1257,6 @@ export class Player {
     this.actionTimer += dt;
     const t = Math.min(1, this.actionTimer / this.actionDuration);
 
-    // Allow late spring-vault timing during vault animation!
     if (!this.vaultSpringUsed && input.jumpBufferTimer > 0) {
       input.jumpBufferTimer = 0;
       this.vaultSpringUsed = true;
@@ -935,7 +1264,6 @@ export class Player {
       this.events.onFovPunch?.(2.5);
     }
 
-    // Smoothly lift feet over obstacle crest
     const ease = 1 - (1 - t) * (1 - t);
     const arcLift = Math.sin(t * Math.PI) * 0.22;
     this.y = this.actionStartY + (this.actionTargetY - this.actionStartY) * ease + arcLift;
@@ -943,7 +1271,6 @@ export class Player {
     this.vx = this.vaultDirX * this.vaultSpeed;
     this.vz = this.vaultDirZ * this.vaultSpeed;
 
-    // Move horizontally with collision above the obstacle crest
     const res = this.world.moveAndSlide(
       this.x,
       this.y,
@@ -962,10 +1289,13 @@ export class Player {
     this.z = res.z;
 
     if (t >= 1) {
-      this.vy = this.vaultSpringUsed ? 6.4 : 2.4;
+      // Dash/Kong vault shoots low and fast across the slab so you land in-stride before the next jump!
+      this.vy = this.vaultSpringUsed ? 4.4 : 2.2;
       this.vx = this.vaultDirX * this.vaultSpeed;
       this.vz = this.vaultDirZ * this.vaultSpeed;
       this.grounded = false;
+      this.airTime = 0;
+      this.justJumpedTimer = JUMP_LURCH_WINDOW * 0.6;
       this.lastWallId = null;
       this.lastGrappleId = null;
       this.state = 'air';
@@ -975,14 +1305,14 @@ export class Player {
   private startMantle(targetX: number, topY: number, targetZ: number): void {
     this.state = 'mantle';
     this.actionTimer = 0;
-    this.actionDuration = 0.27;
+    this.actionDuration = 0.26;
     this.actionStartX = this.x;
     this.actionStartY = this.y;
     this.actionStartZ = this.z;
     this.actionTargetX = targetX;
     this.actionTargetY = topY + 0.02;
     this.actionTargetZ = targetZ;
-    this.vaultSpeed = Math.max(9.6, this.horizSpeed * 0.78);
+    this.vaultSpeed = Math.max(9.8, this.horizSpeed * 0.8);
     this.vy = 0;
     this.grounded = false;
     this.currentRamp = null;
@@ -993,7 +1323,6 @@ export class Player {
     this.actionTimer += dt;
     const t = Math.min(1, this.actionTimer / this.actionDuration);
 
-    // Rise up quickly first, then surge forward over the lip
     const yT = Math.min(1, t / 0.68);
     const yEase = 1 - (1 - yT) * (1 - yT);
     const xzT = Math.max(0, (t - 0.22) / 0.78);
@@ -1010,6 +1339,7 @@ export class Player {
       this.vz = fz * speed;
       this.vy = 0;
       this.grounded = true;
+      this.airTime = 0;
       this.coyoteTimer = COYOTE_TIME;
       this.lastWallId = null;
       this.lastGrappleId = null;
@@ -1030,9 +1360,10 @@ export class Player {
     this.wallNz = nz;
     this.wallSide = side;
     this.wallTimer = 0;
+    this.airTime = 0;
+    this.slideCharge = 1.0;
     this.lastGrappleId = null;
 
-    // Align velocity along wall tangent matching forward look
     const [fx, fz] = this.getHorizForward();
     let tx = -nz;
     let tz = nx;
@@ -1042,10 +1373,9 @@ export class Player {
     }
 
     const boostMin = isRunnerWall ? WALLRUN_MIN_SPEED + 0.8 : WALLRUN_MIN_SPEED;
-    const newSpeed = Math.min(SLIDE_MAX_SPEED, Math.max(boostMin, this.horizSpeed + 1.6));
+    const newSpeed = Math.min(SLIDE_MAX_SPEED, Math.max(boostMin, this.horizSpeed + 1.8));
     this.vx = tx * newSpeed;
     this.vz = tz * newSpeed;
-    // Crisp upward arc entry (kills fall and curves slightly upward first!)
     this.vy = Math.max(2.6, Math.min(4.8, this.vy * 0.45 + 2.8));
     this.flowBuild = 1;
 
@@ -1056,13 +1386,11 @@ export class Player {
   private stepWallRun(input: PlayerInputState, dt: number): void {
     this.wallTimer += dt;
 
-    // Wall-kick jump!
     if (input.jumpBufferTimer > 0) {
       input.jumpBufferTimer = 0;
       const [fx, fz] = this.getHorizForward();
       const curSpd = this.horizSpeed;
 
-      // Blend wall tangent, look direction, and crisp push away from wall!
       let tx = -this.wallNz;
       let tz = this.wallNx;
       if (tx * this.vx + tz * this.vz < 0) {
@@ -1070,19 +1398,16 @@ export class Player {
         tz = -tz;
       }
 
-      const forwardSpeed = Math.min(SLIDE_MAX_SPEED, Math.max(15.2, curSpd + 1.5));
-      // Allow player's camera angle to aim the wall-kick while guaranteeing clean wall separation
+      const forwardSpeed = Math.min(SLIDE_MAX_SPEED, Math.max(15.4, curSpd + 1.6));
       const kickAway = 7.4;
       let nvx = tx * forwardSpeed * 0.72 + fx * forwardSpeed * 0.34 + this.wallNx * kickAway;
       let nvz = tz * forwardSpeed * 0.72 + fz * forwardSpeed * 0.34 + this.wallNz * kickAway;
 
-      // Normalize to crisp predictable speed so wall-to-wall chains feel awesome
       const nl = Math.hypot(nvx, nvz) || 1;
-      const targetKickHoriz = Math.min(SLIDE_MAX_SPEED, Math.max(16.0, curSpd + 1.8));
+      const targetKickHoriz = Math.min(SLIDE_MAX_SPEED, Math.max(16.2, curSpd + 1.9));
       nvx = (nvx / nl) * targetKickHoriz;
       nvz = (nvz / nl) * targetKickHoriz;
 
-      // Guarantee minimum normal separation
       const normComp = nvx * this.wallNx + nvz * this.wallNz;
       if (normComp < 6.2) {
         nvx += this.wallNx * (6.2 - normComp);
@@ -1097,6 +1422,7 @@ export class Player {
       this.lastWallId = this.wallId;
       this.sameWallCooldown = 0.55;
       this.wallId = null;
+      this.justJumpedTimer = JUMP_LURCH_WINDOW * 0.75;
       this.state = 'air';
 
       this.events.onWallKick?.(kickedSide);
@@ -1104,11 +1430,9 @@ export class Player {
       return;
     }
 
-    // Gentle wall-run gravity curve (nearly weightless for first 0.35s, then smooth arc)
     const gravScale = this.wallTimer < 0.35 ? 0.55 : 1.0;
     this.vy -= WALLRUN_GRAVITY * gravScale * dt;
 
-    // Slight magnetic hold toward wall so player never drifts off mid-run
     const holdVx = this.vx - this.wallNx * 1.5;
     const holdVz = this.vz - this.wallNz * 1.5;
 
@@ -1130,7 +1454,6 @@ export class Player {
     this.x = res.x;
     this.y = res.y;
     this.z = res.z;
-    // Restore pure tangential velocity
     let tx = -this.wallNz;
     let tz = this.wallNx;
     if (tx * this.vx + tz * this.vz < 0) {
@@ -1142,16 +1465,17 @@ export class Player {
     this.vz = tz * tanSpd;
     this.vy = res.vy;
 
-    // Rapid wall-run footsteps
-    const stepRate = 3.8;
+    // Rapid light wall-run steps driving head-bone rhythm
+    const stepRate = 3.85;
     this.stridePhase += dt * stepRate * Math.PI;
     const stepIdx = Math.floor(this.stridePhase / Math.PI);
     if (stepIdx !== this.lastStepIndex) {
       this.lastStepIndex = stepIdx;
-      this.events.onFootstep?.(this.horizSpeed, true);
+      this.stepFoot = stepIdx % 2 === 0 ? -1 : 1;
+      this.lastStepPulse = 0.72;
+      this.events.onFootstep?.(this.horizSpeed, true, this.stepFoot);
     }
 
-    // Check wall-run exit conditions
     const stillOnWall =
       this.wallId !== null &&
       this.world.isStillBesideWall(
@@ -1164,7 +1488,6 @@ export class Player {
         PLAYER_RADIUS
       );
 
-    // Letting player pull strongly away from wall also detaches cleanly
     const [rx, rz] = this.getHorizRight();
     const pullAway = input.right * (rx * this.wallNx + rz * this.wallNz);
 
@@ -1183,13 +1506,13 @@ export class Player {
       this.wallId = null;
 
       if (!this.grounded) {
-        // Give brief coyote-like hop off end of a wall-run panel + small forward carry!
         this.coyoteTimer = 0.12;
         this.vx += this.wallNx * 1.4;
         this.vz += this.wallNz * 1.4;
         this.vy = Math.max(this.vy, 1.8);
         this.state = 'air';
       } else {
+        this.landingGraceTimer = 0.15;
         this.state = 'run';
       }
     }
@@ -1206,6 +1529,7 @@ export class Player {
     this.currentRamp = null;
     this.wallId = null;
     this.lastWallId = null;
+    this.slideCharge = 1.0;
 
     const eyeY = this.y + STAND_EYE * 0.75;
     const dx = anchor.x - this.x;
@@ -1214,19 +1538,15 @@ export class Player {
     const dist = Math.hypot(dx, dy, dz) || 1;
     this.grappleRopeLen = Math.max(5.0, dist * 0.96);
 
-    // Crisp initial grapple tug forward + slightly up so swinging feels super responsive!
-    const dirX = dx / dist;
     const dirY = dy / dist;
-    const dirZ = dz / dist;
     const curSpd = this.horizSpeed;
-    const minSwingSpd = Math.max(15.8, curSpd + 2.4);
+    const minSwingSpd = Math.max(16.0, curSpd + 2.4);
 
-    // Blend current direction with anchor direction horizontally
     const hDist = Math.hypot(dx, dz) || 1;
     const ahx = dx / hDist;
     const ahz = dz / hDist;
-    this.vx = this.vx * 0.45 + ahx * minSwingSpd * 0.65;
-    this.vz = this.vz * 0.45 + ahz * minSwingSpd * 0.65;
+    this.vx = this.vx * 0.48 + ahx * minSwingSpd * 0.62;
+    this.vz = this.vz * 0.48 + ahz * minSwingSpd * 0.62;
     const newHs = this.horizSpeed;
     if (newHs < minSwingSpd) {
       this.vx = (this.vx / (newHs || 1)) * minSwingSpd;
@@ -1236,7 +1556,7 @@ export class Player {
     this.flowBuild = 1;
 
     this.events.onGrappleAttach?.(anchor);
-    this.events.onFovPunch?.(5.5);
+    this.events.onFovPunch?.(5.2);
   }
 
   private stepGrapple(input: PlayerInputState, dt: number): void {
@@ -1252,26 +1572,24 @@ export class Player {
     const toAy = anchor.y - attachY;
     const toAz = anchor.z - this.z;
     const dist = Math.hypot(toAx, toAy, toAz) || 1;
-    // Unit vector from anchor to player (radial outward)
     const rx = -toAx / dist;
     const ry = -toAy / dist;
     const rz = -toAz / dist;
 
-    // Gravity during swing
     this.vy -= GRAVITY * 0.88 * dt;
 
-    // Gentle reel-in + look-direction swing drive (Titanfall-style intuitive grapple!)
+    // Smooth reel + look + lateral A/D swing control!
     this.grappleRopeLen = Math.max(4.8, this.grappleRopeLen - 3.6 * dt);
     const [fx, fz] = this.getHorizForward();
-    this.vx += fx * 15.5 * dt;
-    this.vz += fz * 15.5 * dt;
+    const [srx, srz] = this.getHorizRight();
+    this.vx += (fx * 15.5 + srx * input.right * 11.0) * dt;
+    this.vz += (fz * 15.5 + srz * input.right * 11.0) * dt;
 
-    // Also subtle upward reel if player is far below anchor
     if (toAy > 2.0) {
-      this.vy += (-ry) * 9.5 * dt;
+      this.vy += -ry * 9.5 * dt;
     }
 
-    // Pendulum rope constraint: cancel outward velocity along rope so fall converts into forward arc!
+    // Pendulum rope constraint converts drop directly into tangential swing velocity
     if (dist >= this.grappleRopeLen * 0.94) {
       const radialOutVel = this.vx * rx + this.vy * ry + this.vz * rz;
       if (radialOutVel > 0) {
@@ -1281,10 +1599,9 @@ export class Player {
       }
     }
 
-    // Clamp swing speed cleanly so arcs feel weighty and controllable
     const tot = this.totalSpeed;
-    if (tot > 22.5) {
-      const s = 22.5 / tot;
+    if (tot > 23.0) {
+      const s = 23.0 / tot;
       this.vx *= s;
       this.vy *= s;
       this.vz *= s;
@@ -1312,11 +1629,7 @@ export class Player {
     this.vy = res.vy;
     this.vz = res.vz;
 
-    // Check release conditions:
-    // 1. Player jumped during swing -> big slingshot release!
-    // 2. Player released RMB/E after brief min latch -> slingshot release!
-    // 3. Player swung well past anchor upward apex -> clean auto-slingshot so you never swing backward!
-    const hToA = toAx * fx + toAz * fz; // positive while anchor is still ahead, negative once past!
+    const hToA = toAx * fx + toAz * fz;
     const jumpedOut = input.jumpBufferTimer > 0 && this.grappleTimer > 0.08;
     const releasedOut = !input.grappleHeld && this.grappleTimer > 0.22;
     const passedApex =
@@ -1328,15 +1641,15 @@ export class Player {
       if (jumpedOut) input.jumpBufferTimer = 0;
       const slingshot = !res.grounded && (jumpedOut || releasedOut || passedApex);
       if (slingshot) {
-        // Reward clean release with exhilarating upward & forward slingshot!
-        this.vy = Math.max(this.vy + (jumpedOut ? 4.2 : 2.6), jumpedOut ? 9.4 : 7.2);
-        this.vy = Math.min(this.vy, 13.2);
+        this.vy = Math.max(this.vy + (jumpedOut ? 4.2 : 2.6), jumpedOut ? 9.5 : 7.4);
+        this.vy = Math.min(this.vy, 13.4);
         const hs = this.horizSpeed;
-        const targetHs = Math.min(SLIDE_MAX_SPEED, Math.max(16.8, hs + 1.6));
+        const targetHs = Math.min(SLIDE_MAX_SPEED, Math.max(17.0, hs + 1.8));
         if (hs > 1.0) {
           this.vx = (this.vx / hs) * targetHs;
           this.vz = (this.vz / hs) * targetHs;
         }
+        this.justJumpedTimer = JUMP_LURCH_WINDOW;
         this.events.onFovPunch?.(4.5);
       }
 
@@ -1345,6 +1658,7 @@ export class Player {
       this.grappleCooldown = 0.32;
       this.grounded = res.grounded;
       this.currentRamp = res.onRamp;
+      this.landingGraceTimer = res.grounded ? 0.15 : 0;
       this.state = res.grounded ? 'run' : 'air';
       this.events.onGrappleRelease?.(slingshot);
     }

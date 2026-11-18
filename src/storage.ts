@@ -7,6 +7,8 @@ export const DEFAULT_SETTINGS: Settings = {
   sensitivity: 1.0,
   fov: 96,
   volume: 0.75,
+  motionBlur: 1.0,
+  headBob: 1.0,
   showGhost: true,
 };
 
@@ -44,6 +46,8 @@ export function loadSettings(): Settings {
       sensitivity: clamp(Number(parsed.sensitivity ?? DEFAULT_SETTINGS.sensitivity), 0.2, 2.5),
       fov: clamp(Number(parsed.fov ?? DEFAULT_SETTINGS.fov), 80, 115),
       volume: clamp(Number(parsed.volume ?? DEFAULT_SETTINGS.volume), 0, 1),
+      motionBlur: clamp(Number(parsed.motionBlur ?? DEFAULT_SETTINGS.motionBlur), 0, 1.5),
+      headBob: clamp(Number(parsed.headBob ?? DEFAULT_SETTINGS.headBob), 0, 1.5),
       showGhost: typeof parsed.showGhost === 'boolean' ? parsed.showGhost : true,
     };
   } catch {

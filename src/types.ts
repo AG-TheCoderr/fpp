@@ -174,6 +174,8 @@ export interface Settings {
   sensitivity: number; // 0.2 .. 2.5, default 1.0
   fov: number;         // 80 .. 115, default 96
   volume: number;      // 0 .. 1, default 0.75
+  motionBlur: number;  // 0 .. 1.5, default 1.0
+  headBob: number;     // 0 .. 1.5, default 1.0
   showGhost: boolean;  // default true
 }
 
