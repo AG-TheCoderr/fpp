@@ -28,6 +28,7 @@ export class TouchControls {
   private stickBase: HTMLElement;
   private stickKnob: HTMLElement;
   private lookPad: HTMLElement;
+  private lookCursor: HTMLElement;
 
   private stickId: number | null = null;
   private lookId: number | null = null;
@@ -57,20 +58,47 @@ export class TouchControls {
     this.root.className = 'touch-hud';
     this.root.hidden = true;
     this.root.innerHTML = `
-      <div class="touch-look" id="touch-look"></div>
+      <div class="touch-look" id="touch-look">
+        <div class="touch-look-frame">
+          <span class="tl-slash"></span>
+          <span class="tl-label">LOOK</span>
+          <span class="tl-tick tl-tl"></span>
+          <span class="tl-tick tl-tr"></span>
+          <span class="tl-tick tl-bl"></span>
+          <span class="tl-tick tl-br"></span>
+        </div>
+        <div class="touch-look-cursor" id="touch-look-cur" hidden>
+          <span class="tlc-diamond"></span>
+        </div>
+      </div>
       <div class="touch-stick" id="touch-stick">
-        <div class="touch-stick-ring"></div>
-        <div class="touch-stick-knob" id="touch-knob"></div>
+        <div class="touch-stick-plate">
+          <span class="tsp-bar"></span>
+          <span class="tsp-cross-h"></span>
+          <span class="tsp-cross-v"></span>
+        </div>
+        <div class="touch-stick-knob" id="touch-knob">
+          <span class="tsk-slash"></span>
+        </div>
       </div>
       <div class="touch-actions">
-        <button type="button" class="touch-btn touch-btn-jump" data-act="jump">JUMP</button>
-        <button type="button" class="touch-btn touch-btn-slide" data-act="slide">SLIDE</button>
-        <button type="button" class="touch-btn touch-btn-grapple" data-act="grapple">HOOK</button>
+        <button type="button" class="touch-btn touch-btn-slide" data-act="slide">
+          <span class="tb-code">01</span>
+          <span class="tb-name">SLIDE</span>
+        </button>
+        <button type="button" class="touch-btn touch-btn-grapple" data-act="grapple">
+          <span class="tb-code">02</span>
+          <span class="tb-name">HOOK</span>
+        </button>
+        <button type="button" class="touch-btn touch-btn-jump" data-act="jump">
+          <span class="tb-code">GO</span>
+          <span class="tb-name">JUMP</span>
+        </button>
       </div>
       <div class="touch-sys">
-        <button type="button" class="touch-sys-btn" data-act="pause">II</button>
-        <button type="button" class="touch-sys-btn" data-act="restart">R</button>
-        <button type="button" class="touch-sys-btn" data-act="checkpoint">F</button>
+        <button type="button" class="touch-sys-btn" data-act="pause"><span>II</span></button>
+        <button type="button" class="touch-sys-btn" data-act="restart"><span>R</span></button>
+        <button type="button" class="touch-sys-btn" data-act="checkpoint"><span>F</span></button>
       </div>
     `;
     host.appendChild(this.root);
@@ -78,6 +106,7 @@ export class TouchControls {
     this.stickBase = this.root.querySelector('#touch-stick')!;
     this.stickKnob = this.root.querySelector('#touch-knob')!;
     this.lookPad = this.root.querySelector('#touch-look')!;
+    this.lookCursor = this.root.querySelector('#touch-look-cur')!;
 
     if (!this.enabled) return;
     document.documentElement.classList.add('is-touch');
@@ -102,8 +131,8 @@ export class TouchControls {
     const mag = Math.hypot(this.stickX, this.stickY);
     let fx = 0;
     let fy = 0;
-    if (mag > 0.14) {
-      const k = Math.min(1, (mag - 0.14) / 0.86);
+    if (mag > 0.12) {
+      const k = Math.min(1, (mag - 0.12) / 0.88);
       fx = (this.stickX / mag) * k;
       fy = (this.stickY / mag) * k;
     }
@@ -188,6 +217,7 @@ export class TouchControls {
     if (this.stickId !== null) return;
     e.preventDefault();
     this.stickId = e.pointerId;
+    this.stickBase.classList.add('is-live');
     const r = this.stickBase.getBoundingClientRect();
     this.stickOriginX = r.left + r.width * 0.5;
     this.stickOriginY = r.top + r.height * 0.5;
@@ -200,6 +230,8 @@ export class TouchControls {
     this.lookId = e.pointerId;
     this.lookLastX = e.clientX;
     this.lookLastY = e.clientY;
+    this.lookPad.classList.add('is-live');
+    this.placeLookCursor(e.clientX, e.clientY, true);
   }
 
   private onMove(e: PointerEvent): void {
@@ -208,10 +240,16 @@ export class TouchControls {
       this.updateStick(e.clientX, e.clientY);
     } else if (e.pointerId === this.lookId) {
       e.preventDefault();
-      this.lookDX += e.clientX - this.lookLastX;
-      this.lookDY += e.clientY - this.lookLastY;
+      let dx = e.clientX - this.lookLastX;
+      let dy = e.clientY - this.lookLastY;
+      // Kill sub-pixel jitter so rooftop lips stay lockable
+      if (Math.abs(dx) < 0.35) dx = 0;
+      if (Math.abs(dy) < 0.35) dy = 0;
+      this.lookDX += dx;
+      this.lookDY += dy;
       this.lookLastX = e.clientX;
       this.lookLastY = e.clientY;
+      this.placeLookCursor(e.clientX, e.clientY, false);
     }
   }
 
@@ -220,15 +258,23 @@ export class TouchControls {
       this.stickId = null;
       this.stickX = 0;
       this.stickY = 0;
+      this.stickBase.classList.remove('is-live');
       this.stickKnob.style.transform = 'translate(-50%, -50%)';
     }
     if (e.pointerId === this.lookId) {
       this.lookId = null;
+      this.lookPad.classList.remove('is-live');
+      this.lookCursor.hidden = true;
     }
   }
 
+  private placeLookCursor(x: number, y: number, show: boolean): void {
+    if (show) this.lookCursor.hidden = false;
+    this.lookCursor.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
+  }
+
   private updateStick(x: number, y: number): void {
-    const max = 54;
+    const max = 48;
     let dx = x - this.stickOriginX;
     let dy = y - this.stickOriginY;
     const mag = Math.hypot(dx, dy);
@@ -255,6 +301,9 @@ export class TouchControls {
     this.slidePressed = false;
     this.grapplePressed = false;
     this.stickKnob.style.transform = 'translate(-50%, -50%)';
+    this.stickBase.classList.remove('is-live');
+    this.lookPad.classList.remove('is-live');
+    this.lookCursor.hidden = true;
     this.root.querySelectorAll('.is-down').forEach((el) => el.classList.remove('is-down'));
   }
 }

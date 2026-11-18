@@ -248,10 +248,25 @@ export class InputManager {
   }
 
   consumeLookDelta(sensitivity: number, dt: number): [number, number] {
-    const baseRadPerPx = 0.0021 * sensitivity;
     const [tdx, tdy] = this.touch.consumeLook();
-    let dYaw = -(this.accumDX + tdx * 1.35) * baseRadPerPx;
-    let dPitch = -(this.accumDY + tdy * 1.35) * baseRadPerPx;
+    let dYaw = 0;
+    let dPitch = 0;
+
+    if (this.touch.enabled) {
+      // Viewport-scaled look: a ~45% screen-width flick turns ~90° at default sensitivity.
+      // Fine aim stays tight; flicks accelerate so rooftop lips snap without overshoot soup.
+      const span = Math.max(360, window.innerWidth);
+      const mag = Math.hypot(tdx, tdy);
+      const accel =
+        mag < 1.2 ? 0.42 : mag < 6 ? 0.72 + mag * 0.04 : 1.05 + Math.min(1.15, (mag - 6) * 0.055);
+      const yawPerPx = ((Math.PI * 0.92) / span) * sensitivity * accel;
+      dYaw = -tdx * yawPerPx;
+      dPitch = -tdy * yawPerPx * 0.62;
+    } else {
+      const baseRadPerPx = 0.0021 * sensitivity;
+      dYaw = -this.accumDX * baseRadPerPx;
+      dPitch = -this.accumDY * baseRadPerPx;
+    }
     this.accumDX = 0;
     this.accumDY = 0;
 
