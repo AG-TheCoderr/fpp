@@ -82,7 +82,7 @@ class StrideGame {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.14;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -100,25 +100,25 @@ class StrideGame {
     this.scene.add(this.camera);
 
     // 3. Three-point architectural daylight: warm sun + cerulean sky/concrete bounce + cool shadow fill
-    const hemi = new THREE.HemisphereLight('#8dc4ff', '#cfc6ba', 1.05);
+    const hemi = new THREE.HemisphereLight('#7ab4f0', '#b9a898', 0.82);
     this.scene.add(hemi);
 
-    const fill = new THREE.DirectionalLight('#93c2f5', 0.48);
+    const fill = new THREE.DirectionalLight('#8eb6ea', 0.32);
     fill.position.set(-40, 35, 50);
     this.scene.add(fill);
 
-    this.sunLight = new THREE.DirectionalLight('#fff7ea', 2.45);
+    this.sunLight = new THREE.DirectionalLight('#fff4dc', 2.85);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.set(2048, 2048);
     this.sunLight.shadow.camera.near = 4;
-    this.sunLight.shadow.camera.far = 190;
-    const sBound = 54;
+    this.sunLight.shadow.camera.far = 220;
+    const sBound = 50;
     this.sunLight.shadow.camera.left = -sBound;
     this.sunLight.shadow.camera.right = sBound;
     this.sunLight.shadow.camera.top = sBound;
     this.sunLight.shadow.camera.bottom = -sBound;
-    this.sunLight.shadow.bias = -0.0004;
-    this.sunLight.shadow.normalBias = 0.035;
+    this.sunLight.shadow.bias = -0.00028;
+    this.sunLight.shadow.normalBias = 0.022;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
 
