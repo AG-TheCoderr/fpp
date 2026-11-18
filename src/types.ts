@@ -170,13 +170,20 @@ export type GameScreen =
   | 'paused'
   | 'finished';
 
+export type GraphicsQuality = 'low' | 'medium' | 'high';
+
+export type FoliageDensity = 'off' | 'low' | 'high';
+
 export interface Settings {
-  sensitivity: number; // 0.2 .. 2.5, default 1.0
-  fov: number;         // 80 .. 115, default 96
-  volume: number;      // 0 .. 1, default 0.75
-  motionBlur: number;  // 0 .. 1.5, default 1.0
-  headBob: number;     // 0 .. 1.5, default 1.0
-  showGhost: boolean;  // default true
+  sensitivity: number;       // 0.2 .. 2.5, default 1.0
+  fov: number;               // 80 .. 115, default 96
+  volume: number;            // 0 .. 1, default 0.75
+  motionBlur: number;        // 0 .. 1.5, default 1.0
+  headBob: number;           // 0 .. 1.5, default 1.0
+  graphics: GraphicsQuality; // default 'high'
+  foliage: FoliageDensity;   // default 'high'
+  showGhost: boolean;        // default true
+  showFps: boolean;          // default false
 }
 
 export interface GhostFrame {

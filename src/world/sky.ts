@@ -33,7 +33,7 @@ const SKY_FRAG = /* glsl */ `
     float v = 0.0;
     float a = 0.5;
     mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 3; i++) {
       v += a * noise(p);
       p = rot * p * 2.07;
       a *= 0.5;
@@ -45,7 +45,6 @@ const SKY_FRAG = /* glsl */ `
     vec3 dir = normalize(vWorldDir);
     float y = dir.y;
 
-    // Crisp Mirror's Edge City of Glass cobalt-to-cerulean-to-warm-haze sky
     vec3 zenithCol = vec3(0.09, 0.34, 0.78);
     vec3 midSkyCol = vec3(0.32, 0.62, 0.94);
     vec3 horizonCol = vec3(0.84, 0.91, 0.97);
@@ -57,21 +56,17 @@ const SKY_FRAG = /* glsl */ `
       col = mix(horizonCol, midSkyCol, smoothstep(0.0, 0.55, t1));
       col = mix(col, zenithCol, smoothstep(0.35, 1.0, t1));
     } else {
-      // Bright airy metropolitan haze in the street canyon far below
       col = mix(horizonCol, abyssCol, clamp(-y * 3.0, 0.0, 1.0));
     }
 
-    // Subtle high-altitude windswept cirrus clouds
     if (y > 0.04) {
       vec2 cloudUV = dir.xz / (y + 0.18) * 1.45 + vec2(uTime * 0.008, -uTime * 0.005);
-      // Stretch along wind direction
       cloudUV.x *= 0.55;
       float c = fbm(cloudUV);
       float wisps = smoothstep(0.54, 0.82, c) * smoothstep(0.04, 0.24, y) * (1.0 - smoothstep(0.65, 0.98, y));
       col = mix(col, vec3(0.97, 0.985, 1.0), wisps * 0.36);
     }
 
-    // Warm atmospheric Mie scatter around sun + crisp solar disc
     float sunDot = max(dot(dir, normalize(uSunDir)), 0.0);
     col += vec3(1.0, 0.93, 0.80) * pow(sunDot, 7.0) * 0.22;
     col += vec3(1.0, 0.97, 0.90) * pow(sunDot, 64.0) * 0.55;
@@ -81,6 +76,8 @@ const SKY_FRAG = /* glsl */ `
   }
 `;
 
+const BIRD_COUNT = 10;
+
 export class SkySystem {
   readonly group = new THREE.Group();
   private skyMesh: THREE.Mesh;
@@ -88,10 +85,10 @@ export class SkySystem {
     uSunDir: { value: THREE.Vector3 };
     uTime: { value: number };
   };
+  private birdMesh: THREE.InstancedMesh;
+  private birdDummy = new THREE.Object3D();
+  private birdFlap = { value: 0 };
   private birds: {
-    mesh: THREE.Group;
-    leftWing: THREE.Mesh;
-    rightWing: THREE.Mesh;
     centerX: number;
     centerZ: number;
     y: number;
@@ -99,6 +96,7 @@ export class SkySystem {
     speed: number;
     phase: number;
   }[] = [];
+  private birdVisible = true;
 
   constructor() {
     this.uniforms = {
@@ -106,7 +104,7 @@ export class SkySystem {
       uTime: { value: 0 },
     };
 
-    const geo = new THREE.SphereGeometry(750, 32, 20);
+    const geo = new THREE.SphereGeometry(750, 20, 12);
     const mat = new THREE.ShaderMaterial({
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
@@ -121,24 +119,40 @@ export class SkySystem {
     this.skyMesh.renderOrder = -1000;
     this.group.add(this.skyMesh);
 
-    // Subtle soaring rooftop birds (classic Mirror's Edge sky detail!)
-    const wingGeo = new THREE.PlaneGeometry(0.55, 0.18);
+    const wingGeo = new THREE.PlaneGeometry(1.05, 0.18);
     const birdMat = new THREE.MeshBasicMaterial({
       color: '#1e2836',
       side: THREE.DoubleSide,
     });
-    for (let i = 0; i < 10; i++) {
-      const bGroup = new THREE.Group();
-      const lw = new THREE.Mesh(wingGeo, birdMat);
-      lw.position.x = -0.26;
-      const rw = new THREE.Mesh(wingGeo, birdMat);
-      rw.position.x = 0.26;
-      bGroup.add(lw, rw);
-      this.group.add(bGroup);
+    birdMat.customProgramCacheKey = () => 'stride-bird-flap-v1';
+    this.birdFlap = { value: 0 };
+    birdMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uFlap = this.birdFlap;
+      shader.vertexShader =
+        `uniform float uFlap;\n` +
+        shader.vertexShader.replace(
+          '#include <begin_vertex>',
+          /* glsl */ `
+          #include <begin_vertex>
+          {
+            float side = sign(position.x);
+            float flap = sin(uFlap + instanceMatrix[3].x * 0.4) * 0.48;
+            float c = cos(side * flap);
+            float s = sin(side * flap);
+            vec3 p = transformed;
+            transformed.y = p.y * c - p.x * s * 0.0 + abs(p.x) * s * 0.85;
+          }
+          `
+        );
+    };
+
+    this.birdMesh = new THREE.InstancedMesh(wingGeo, birdMat, BIRD_COUNT);
+    this.birdMesh.frustumCulled = false;
+    this.birdMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.group.add(this.birdMesh);
+
+    for (let i = 0; i < BIRD_COUNT; i++) {
       this.birds.push({
-        mesh: bGroup,
-        leftWing: lw,
-        rightWing: rw,
         centerX: (i % 2 === 0 ? 1 : -1) * (24 + i * 4),
         centerZ: -45 - i * 22,
         y: 26 + (i % 4) * 6,
@@ -153,22 +167,37 @@ export class SkySystem {
     this.uniforms.uSunDir.value.copy(dir).normalize();
   }
 
-  update(dt: number, cameraPos: THREE.Vector3): void {
+  update(dt: number, cameraPos: THREE.Vector3, birdsEnabled = true): void {
     this.uniforms.uTime.value += dt;
     this.skyMesh.position.copy(cameraPos);
 
+    if (!birdsEnabled) {
+      if (this.birdVisible) {
+        this.birdMesh.visible = false;
+        this.birdVisible = false;
+      }
+      return;
+    }
+    if (!this.birdVisible) {
+      this.birdMesh.visible = true;
+      this.birdVisible = true;
+    }
+
+    this.birdFlap.value = this.uniforms.uTime.value * 7.5;
     const t = this.uniforms.uTime.value;
+    const dummy = this.birdDummy;
     for (let i = 0; i < this.birds.length; i++) {
       const b = this.birds[i];
       const a = t * b.speed + b.phase;
-      const nx = b.centerX + Math.cos(a) * b.radius;
-      const nz = b.centerZ + Math.sin(a) * b.radius;
-      const ny = b.y + Math.sin(a * 2.0) * 1.2;
-      b.mesh.position.set(nx, ny, nz);
-      b.mesh.rotation.y = -a;
-      const flap = Math.sin(t * 7.5 + b.phase * 3.0) * 0.48;
-      b.leftWing.rotation.z = flap;
-      b.rightWing.rotation.z = -flap;
+      dummy.position.set(
+        b.centerX + Math.cos(a) * b.radius,
+        b.y + Math.sin(a * 2.0) * 1.2,
+        b.centerZ + Math.sin(a) * b.radius
+      );
+      dummy.rotation.set(0, -a, 0);
+      dummy.updateMatrix();
+      this.birdMesh.setMatrixAt(i, dummy.matrix);
     }
+    this.birdMesh.instanceMatrix.needsUpdate = true;
   }
 }
