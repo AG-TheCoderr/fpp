@@ -81,6 +81,15 @@ export interface StepResult {
 
 const STEP_HEIGHT = 0.48;
 
+interface SwingVolume {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+}
+
 export class PhysicsWorld {
   readonly boxes: SolidBox[] = [];
   readonly ramps: SolidRamp[] = [];
@@ -89,6 +98,7 @@ export class PhysicsWorld {
   readonly checkpoints: CheckpointDef[] = [];
   readonly finish: FinishDef;
   readonly killY: number;
+  private swingVolumes: SwingVolume[] = [];
 
   constructor(course: CourseDef) {
     this.killY = course.killY;
@@ -98,6 +108,20 @@ export class PhysicsWorld {
     this.checkpoints = course.checkpoints;
 
     course.boxes.forEach((b, idx) => {
+      if (
+        b.style !== 'vault' &&
+        b.style !== 'slide' &&
+        b.style !== 'wallrun'
+      ) {
+        this.swingVolumes.push({
+          minX: b.x - b.w * 0.5,
+          maxX: b.x + b.w * 0.5,
+          minY: b.y,
+          maxY: b.y + b.h,
+          minZ: b.z - b.d * 0.5,
+          maxZ: b.z + b.d * 0.5,
+        });
+      }
       if (b.noCollide) return;
       // For 'rooftop', collision extends well down so player collides cleanly with building upper walls too
       const extraDown = b.style === 'rooftop' ? 40 : 0;
@@ -728,6 +752,52 @@ export class PhysicsWorld {
   }
 
   /**
+   * Spider-Man aim: ray against every rooftop (including noCollide scenery),
+   * snapping side hits up to the roof lip so you can web any building you look at.
+   */
+  findAimSwing(
+    eyeX: number,
+    eyeY: number,
+    eyeZ: number,
+    lookX: number,
+    lookY: number,
+    lookZ: number,
+    excludeId: string | null = null
+  ): { anchor: GrappleDef; dist: number } | null {
+    const minT = 4.2;
+    const maxT = 56;
+    let bestT = maxT + 1;
+    let hitX = 0;
+    let hitY = 0;
+    let hitZ = 0;
+
+    for (let i = 0; i < this.swingVolumes.length; i++) {
+      const v = this.swingVolumes[i];
+      const t = rayAabb(eyeX, eyeY, eyeZ, lookX, lookY, lookZ, v, minT, maxT);
+      if (t === null || t >= bestT) continue;
+      const hx = eyeX + lookX * t;
+      const hy = eyeY + lookY * t;
+      const hz = eyeZ + lookZ * t;
+      bestT = t;
+      // Side-wall hits snap to the cornice so the rope always hangs from a roof lip
+      const onTop = hy >= v.maxY - 0.45;
+      hitX = Math.max(v.minX + 0.4, Math.min(v.maxX - 0.4, hx));
+      hitZ = Math.max(v.minZ + 0.4, Math.min(v.maxZ - 0.4, hz));
+      hitY = onTop ? v.maxY + 0.12 : v.maxY + 0.18;
+    }
+
+    if (bestT <= maxT) {
+      const id = `web_${Math.round(hitX * 2)}_${Math.round(hitZ * 2)}`;
+      return {
+        anchor: { id, x: hitX, y: hitY, z: hitZ, radius: 56 },
+        dist: bestT,
+      };
+    }
+
+    return this.findBestGrapple(eyeX, eyeY, eyeZ, lookX, lookY, lookZ, excludeId);
+  }
+
+  /**
    * Check if player crossed a checkpoint volume (generous vertical height so air jumps count!).
    */
   checkCheckpoint(px: number, py: number, pz: number, passedCount: number): CheckpointDef | null {
@@ -762,4 +832,36 @@ export class PhysicsWorld {
       py <= f.y + 9.5
     );
   }
+}
+
+function rayAabb(
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+  b: SwingVolume,
+  minT: number,
+  maxT: number
+): number | null {
+  const invX = dx !== 0 ? 1 / dx : 1e15;
+  const invY = dy !== 0 ? 1 / dy : 1e15;
+  const invZ = dz !== 0 ? 1 / dz : 1e15;
+  let t1 = (b.minX - ox) * invX;
+  let t2 = (b.maxX - ox) * invX;
+  let tmin = Math.min(t1, t2);
+  let tmax = Math.max(t1, t2);
+  t1 = (b.minY - oy) * invY;
+  t2 = (b.maxY - oy) * invY;
+  tmin = Math.max(tmin, Math.min(t1, t2));
+  tmax = Math.min(tmax, Math.max(t1, t2));
+  t1 = (b.minZ - oz) * invZ;
+  t2 = (b.maxZ - oz) * invZ;
+  tmin = Math.max(tmin, Math.min(t1, t2));
+  tmax = Math.min(tmax, Math.max(t1, t2));
+  if (tmax < tmin) return null;
+  const t = tmin >= minT ? tmin : tmax;
+  if (t < minT || t > maxT) return null;
+  return t;
 }
