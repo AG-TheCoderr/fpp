@@ -17,6 +17,8 @@ const BLUR_FRAG = /* glsl */ `
   uniform float uSpeedRatio;
   uniform float uFrameJitter;
   uniform float uSampleCount;
+  uniform float uFxStrength;
+  uniform float uPunch;
 
   varying vec2 vUv;
 
@@ -134,9 +136,68 @@ const BLUR_FRAG = /* glsl */ `
       color = accum / wSum;
     }
 
-    // Whisper-subtle optical edge focus only at very high momentum (> 17 m/s)
     float edgeDarken = 1.0 - smoothstep(0.42, 0.92, radial) * uSpeedRatio * 0.11;
     color *= edgeDarken;
+
+    // --- Cinematic lens: barrel + chromatic aberration (speed punches the fringe) ---
+    vec2 n = (vUv - 0.5) * vec2(1.0, uTexelSize.x / max(uTexelSize.y, 1e-5));
+    float r2 = dot(n, n);
+    float barrel = 0.055 * uFxStrength + uPunch * 0.07;
+    vec2 distorted = n * (1.0 + barrel * r2);
+    // Restore aspect
+    distorted.y *= uTexelSize.y / max(uTexelSize.x, 1e-5);
+    vec2 uvD = distorted + 0.5;
+    uvD = clamp(uvD, vec2(0.004), vec2(0.996));
+
+    vec2 dir = length(n) > 1e-4 ? normalize(n) : vec2(0.0);
+    float ca = (0.0016 + uPunch * 0.0048 + uSpeedRatio * 0.0035) * uFxStrength;
+    vec3 split;
+    split.r = texture2D(tColor, clamp(uvD + dir * ca * 1.35, 0.002, 0.998)).r;
+    split.g = texture2D(tColor, uvD).g;
+    split.b = texture2D(tColor, clamp(uvD - dir * ca * 1.15, 0.002, 0.998)).b;
+    // Keep fovea clean; fringe lives in the periphery
+    float fringeMix = smoothstep(0.04, 0.42, radial) * uFxStrength;
+    color = mix(color, split, fringeMix * 0.85);
+
+    // Cheap dual-radius highlight bloom (sun, white concrete, runner red)
+    vec3 bloom = vec3(0.0);
+    float bSum = 0.0;
+    vec2 bOff[8];
+    bOff[0] = vec2( 1.0,  0.0);
+    bOff[1] = vec2(-1.0,  0.0);
+    bOff[2] = vec2( 0.0,  1.0);
+    bOff[3] = vec2( 0.0, -1.0);
+    bOff[4] = vec2( 0.72,  0.72);
+    bOff[5] = vec2(-0.72,  0.72);
+    bOff[6] = vec2( 0.72, -0.72);
+    bOff[7] = vec2(-0.72, -0.72);
+    for (int k = 0; k < 8; k++) {
+      vec2 o1 = bOff[k] * uTexelSize * 7.5;
+      vec2 o2 = bOff[k] * uTexelSize * 18.0;
+      vec3 s1 = texture2D(tColor, clamp(uvD + o1, 0.002, 0.998)).rgb;
+      vec3 s2 = texture2D(tColor, clamp(uvD + o2, 0.002, 0.998)).rgb;
+      float l1 = max(0.0, luma(s1) - 0.92);
+      float l2 = max(0.0, luma(s2) - 0.88);
+      bloom += s1 * l1 * 1.1 + s2 * l2 * 0.65;
+      bSum += l1 + l2;
+    }
+    color += bloom * (0.085 + uPunch * 0.09) * uFxStrength;
+
+    // Punch: warm highlight lift + cool crushed shadows (Mirror's Edge still)
+    vec3 lumaW = vec3(0.2126, 0.7152, 0.0722);
+    float Y = dot(color, lumaW);
+    vec3 shadowed = mix(vec3(0.04, 0.07, 0.12), color, smoothstep(0.0, 0.22, Y));
+    color = mix(color, shadowed, 0.22 * uFxStrength);
+    color *= 1.0 + 0.08 * uFxStrength;
+    color = mix(color, color * vec3(1.06, 1.02, 0.97), 0.18 * uFxStrength);
+
+    // Vignette + speed tunnel
+    float vig = smoothstep(0.15, 1.05, radial);
+    color *= 1.0 - vig * (0.22 + uPunch * 0.18) * uFxStrength;
+
+    // Fine IGN grain so the HDR grade doesn't look plastic
+    float g = ign(gl_FragCoord.xy + vec2(uFrameJitter * 19.0, uFrameJitter * 7.0)) - 0.5;
+    color += g * 0.018 * uFxStrength;
 
     gl_FragColor = vec4(color, 1.0);
     #include <tonemapping_fragment>
@@ -166,6 +227,8 @@ export class VelocityMotionBlur {
   private renderScale = 1;
   private sampleCount = 12;
   private dprCap = 2;
+  private fxStrength = 1;
+  private punch = 0;
 
   constructor(private renderer: THREE.WebGLRenderer) {
     const size = this.getBufferSize();
@@ -183,6 +246,8 @@ export class VelocityMotionBlur {
         uSpeedRatio: { value: 0.0 },
         uFrameJitter: { value: 0.0 },
         uSampleCount: { value: 12 },
+        uFxStrength: { value: 1.0 },
+        uPunch: { value: 0.0 },
       },
       depthTest: false,
       depthWrite: false,
@@ -209,14 +274,17 @@ export class VelocityMotionBlur {
       this.renderScale = 0.72;
       this.sampleCount = 6;
       this.dprCap = 1;
+      this.fxStrength = 0.42;
     } else if (graphics === 'medium') {
       this.renderScale = 0.88;
       this.sampleCount = 8;
       this.dprCap = 1.5;
+      this.fxStrength = 0.78;
     } else {
       this.renderScale = 1;
       this.sampleCount = 12;
       this.dprCap = 2;
+      this.fxStrength = 1;
     }
     this.resize();
   }
@@ -264,6 +332,7 @@ export class VelocityMotionBlur {
 
   resetVelocity(): void {
     this.smoothVel.set(0, 0, 0);
+    this.punch = 0;
   }
 
   render(
@@ -279,14 +348,6 @@ export class VelocityMotionBlur {
     dt: number,
     enableBlur: boolean
   ): void {
-    // Fast bypass when blur is disabled or on menu/pause screens (uses native MSAA backbuffer)
-    if (!enableBlur || blurSetting <= 0.01) {
-      this.smoothVel.set(0, 0, 0);
-      this.renderer.setRenderTarget(null);
-      this.renderer.render(scene, camera);
-      return;
-    }
-
     // Smooth 3D velocity slightly so blur trails feel fluid and cinema-grade
     const vBlend = Math.min(1, 18 * Math.max(0.001, dt));
     this.smoothVel.x += (vx - this.smoothVel.x) * vBlend;
@@ -308,17 +369,12 @@ export class VelocityMotionBlur {
     const rPitch = clampRot(angVelPitch, 2.6) * rotShutter;
     const rRoll = clampRot(angVelRoll, 3.2) * rotShutter;
 
-    // Skip offscreen pass entirely when essentially stationary (saves GPU + keeps native MSAA!)
-    if (
-      speed * transShutter < 0.015 &&
-      Math.abs(rYaw) + Math.abs(rPitch) + Math.abs(rRoll) < 0.0015
-    ) {
-      this.renderer.setRenderTarget(null);
-      this.renderer.render(scene, camera);
-      return;
-    }
+    const doBlur =
+      enableBlur &&
+      blurSetting > 0.01 &&
+      (speed * transShutter >= 0.015 ||
+        Math.abs(rYaw) + Math.abs(rPitch) + Math.abs(rRoll) >= 0.0015);
 
-    // Compute exact current -> shutter-open clip reprojection matrix
     camera.updateMatrixWorld();
     this.currViewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.invCurrViewProj.copy(this.currViewProj).invert();
@@ -340,11 +396,15 @@ export class VelocityMotionBlur {
 
     this.frameCounter = (this.frameCounter + 1) % 64;
     this.material.uniforms.uReproject.value.copy(this.reproject);
-    this.material.uniforms.uBlurScale.value = 1.0;
+    this.material.uniforms.uBlurScale.value = doBlur ? 1.0 : 0.0;
     this.material.uniforms.uSpeedRatio.value =
       smoothstep(15.5, 25.0, speed) * Math.min(1.2, blurSetting);
     this.material.uniforms.uFrameJitter.value = this.frameCounter / 64;
-    this.material.uniforms.uSampleCount.value = this.sampleCount;
+    this.material.uniforms.uSampleCount.value = doBlur ? this.sampleCount : 0;
+    this.material.uniforms.uFxStrength.value = this.fxStrength;
+    const punchTarget = smoothstep(10.0, 22.0, speed);
+    this.punch += (punchTarget - this.punch) * Math.min(1, 7 * dt);
+    this.material.uniforms.uPunch.value = this.punch;
 
     // Pass 1: Render 3D world to HDR + Depth target
     this.renderer.setRenderTarget(this.target);
