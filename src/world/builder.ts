@@ -159,6 +159,10 @@ export class BuiltCourse {
         this.group.add(slab);
         this.trackStatic(slab, 380, 10);
 
+        if (b.noShaft) {
+          break;
+        }
+
         // 2. Glass-and-concrete skyscraper shaft (trimmed depth; unseen -Y face dropped)
         const shaftH = 92;
         const inset = 0.35;

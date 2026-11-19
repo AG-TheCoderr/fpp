@@ -179,9 +179,16 @@ class StrideGame {
     });
 
     this.applyGraphics(this.settings.graphics);
-    this.loadCourse(0);
     this.ui.showTitle(0);
     registerServiceWorker();
+    // Paint the title menu first — course build is heavy and used to leave a blank blue screen.
+    requestAnimationFrame(() => {
+      try {
+        this.loadCourse(0);
+      } catch (err) {
+        console.error('STRIDE failed to load course', err);
+      }
+    });
 
     const enterFullscreen = () => requestAppFullscreen();
     window.addEventListener('pointerdown', enterFullscreen, { capture: true });

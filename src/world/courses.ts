@@ -603,7 +603,7 @@ function sprinklePlayground(course: CourseDef): CourseDef {
     }
   }
   const baseTop = nRoof > 0 ? avgTop / nRoof : 4;
-  const pad = 190;
+  const pad = 88;
   let seed = course.id.charCodeAt(0) * 7919 + 77;
   const rand = () => {
     seed = (seed * 1664525 + 1013904223) >>> 0;
@@ -630,8 +630,8 @@ function sprinklePlayground(course: CourseDef): CourseDef {
   };
 
   const extra: BoxDef[] = [];
-  for (let x = minX - pad; x <= maxX + pad; x += 38) {
-    for (let z = minZ - pad; z <= maxZ + pad; z += 38) {
+  for (let x = minX - pad; x <= maxX + pad; x += 52) {
+    for (let z = minZ - pad; z <= maxZ + pad; z += 52) {
       const jx = x + (rand() - 0.5) * 10;
       const jz = z + (rand() - 0.5) * 10;
       const w = 16 + rand() * 18;
@@ -641,7 +641,7 @@ function sprinklePlayground(course: CourseDef): CourseDef {
       extra.push(
         roof(jx, Math.max(-2, topY), jz, w, d, {
           cleanRoof: true,
-          label: rand() > 0.82 ? 'CITY' : undefined,
+          noShaft: true,
         })
       );
     }
