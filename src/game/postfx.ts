@@ -199,8 +199,10 @@ const BLUR_FRAG = /* glsl */ `
 
     if (uGodRays > 0.01) {
       vec3 rays = texture2D(tRays, vUv).rgb;
+      rays = rays / (1.0 + rays);
+      rays = min(rays, vec3(0.22));
       float fg = smoothstep(0.82, 0.998, centerDepth);
-      color += rays * mix(0.12, 1.0, fg) * uGodRays;
+      color += rays * mix(0.08, 0.85, fg) * uGodRays;
     }
 
     // Fine IGN grain so the HDR grade doesn't look plastic
@@ -263,16 +265,15 @@ const RAY_FRAG = /* glsl */ `
       wSumG += weight;
       weight *= decay;
     }
-    float haze = pow(max(sum / wSumG, 0.0), mix(0.68, 0.48, lookIn));
-    float radialSoft = exp(-distSun * mix(0.52, 1.15, lookIn));
-    float edgeFeather = smoothstep(0.0, mix(0.04, 0.14, lookIn), distSun);
+    float haze = pow(max(sum / wSumG, 0.0), mix(0.68, 0.55, lookIn));
+    float radialSoft = exp(-distSun * mix(0.52, 1.6, lookIn));
+    float edgeFeather = smoothstep(0.0, mix(0.04, 0.18, lookIn), distSun);
     float shafts = haze * radialSoft * edgeFeather;
-    float veil = lookIn * exp(-distSun * distSun * 9.0) * 0.22;
-    float tint = 0.55;
-    if (lastSky > 0.2) {
-      tint = max(texture2D(tColor, uSunUV).r, 0.45);
-    }
-    vec3 rgb = vec3(1.02, 0.94, 0.80) * (shafts * 0.62 + veil) * uSunOn * tint;
+    // Staring at the sun: keep a thin haze, don't pile HDR on the disc
+    float onAxis = mix(1.0, 0.16, lookIn * lookIn);
+    float veil = lookIn * exp(-distSun * distSun * 14.0) * 0.07;
+    vec3 rgb = vec3(1.02, 0.94, 0.80) * (shafts * 0.45 * onAxis + veil) * uSunOn;
+    rgb = min(rgb, vec3(0.35));
     gl_FragColor = vec4(rgb, 1.0);
   }
 `;
