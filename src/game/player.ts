@@ -1531,32 +1531,41 @@ export class Player {
     this.lastWallId = null;
     this.slideCharge = 1.0;
 
-    const eyeY = this.y + STAND_EYE * 0.75;
-    const dx = anchor.x - this.x;
-    const dy = anchor.y - eyeY;
-    const dz = anchor.z - this.z;
-    const dist = Math.hypot(dx, dy, dz) || 1;
-    this.grappleRopeLen = Math.max(5.0, dist * 0.96);
-
-    const dirY = dy / dist;
-    const curSpd = this.horizSpeed;
-    const minSwingSpd = Math.max(16.0, curSpd + 2.4);
-
-    const hDist = Math.hypot(dx, dz) || 1;
-    const ahx = dx / hDist;
-    const ahz = dz / hDist;
-    this.vx = this.vx * 0.48 + ahx * minSwingSpd * 0.62;
-    this.vz = this.vz * 0.48 + ahz * minSwingSpd * 0.62;
-    const newHs = this.horizSpeed;
-    if (newHs < minSwingSpd) {
-      this.vx = (this.vx / (newHs || 1)) * minSwingSpd;
-      this.vz = (this.vz / (newHs || 1)) * minSwingSpd;
-    }
-    this.vy = Math.max(this.vy * 0.35 + dirY * 6.5, 2.2);
+    const hitchY = this.y + 1.25;
+    const dist =
+      Math.hypot(anchor.x - this.x, anchor.y - hitchY, anchor.z - this.z) || 1;
+    // True rope: length is the line you threw, not a scripted launch
+    this.grappleRopeLen = Math.max(6.5, Math.min(46, dist));
     this.flowBuild = 1;
 
     this.events.onGrappleAttach?.(anchor);
-    this.events.onFovPunch?.(5.2);
+    this.events.onFovPunch?.(3.4);
+  }
+
+  private constrainRope(ax: number, ay: number, az: number): void {
+    const hitchY = this.y + 1.25;
+    const dx = this.x - ax;
+    const dy = hitchY - ay;
+    const dz = this.z - az;
+    const dist = Math.hypot(dx, dy, dz) || 1e-4;
+    if (dist <= this.grappleRopeLen) return;
+
+    const inv = 1 / dist;
+    const nx = dx * inv;
+    const ny = dy * inv;
+    const nz = dz * inv;
+    const s = this.grappleRopeLen * inv;
+    this.x = ax + dx * s;
+    this.y = ay + dy * s - 1.25;
+    this.z = az + dz * s;
+
+    // Kill stretch; keep (and thus convert) tangential speed — real pendulum
+    const rad = this.vx * nx + this.vy * ny + this.vz * nz;
+    if (rad > 0) {
+      this.vx -= rad * nx;
+      this.vy -= rad * ny;
+      this.vz -= rad * nz;
+    }
   }
 
   private stepGrapple(input: PlayerInputState, dt: number): void {
@@ -1567,41 +1576,24 @@ export class Player {
     }
 
     this.grappleTimer += dt;
-    const attachY = this.y + 1.25;
-    const toAx = anchor.x - this.x;
-    const toAy = anchor.y - attachY;
-    const toAz = anchor.z - this.z;
-    const dist = Math.hypot(toAx, toAy, toAz) || 1;
-    const rx = -toAx / dist;
-    const ry = -toAy / dist;
-    const rz = -toAz / dist;
+    this.vy -= GRAVITY * dt;
 
-    this.vy -= GRAVITY * 0.88 * dt;
-
-    // Smooth reel + look + lateral A/D swing control!
-    this.grappleRopeLen = Math.max(5.2, this.grappleRopeLen - 2.4 * dt);
     const [fx, fz] = this.getHorizForward();
     const [srx, srz] = this.getHorizRight();
-    this.vx += (fx * 15.5 + srx * input.right * 11.0) * dt;
-    this.vz += (fz * 15.5 + srz * input.right * 11.0) * dt;
-
-    if (toAy > 2.0) {
-      this.vy += -ry * 9.5 * dt;
+    // Pump the arc: A/D is strong, W reels in, S pays rope out
+    this.vx += (fx * 5.5 + srx * input.right * 16.0) * dt;
+    this.vz += (fz * 5.5 + srz * input.right * 16.0) * dt;
+    if (input.forward > 0.25) {
+      this.grappleRopeLen = Math.max(6.0, this.grappleRopeLen - 11.0 * dt);
+    } else if (input.forward < -0.25) {
+      this.grappleRopeLen = Math.min(48, this.grappleRopeLen + 10.0 * dt);
     }
 
-    // Pendulum rope constraint converts drop directly into tangential swing velocity
-    if (dist >= this.grappleRopeLen * 0.94) {
-      const radialOutVel = this.vx * rx + this.vy * ry + this.vz * rz;
-      if (radialOutVel > 0) {
-        this.vx -= radialOutVel * rx;
-        this.vy -= radialOutVel * ry;
-        this.vz -= radialOutVel * rz;
-      }
-    }
+    this.constrainRope(anchor.x, anchor.y, anchor.z);
 
     const tot = this.totalSpeed;
-    if (tot > 28.0) {
-      const s = 28.0 / tot;
+    if (tot > 29.0) {
+      const s = 29.0 / tot;
       this.vx *= s;
       this.vy *= s;
       this.vz *= s;
@@ -1628,29 +1620,40 @@ export class Player {
     this.vx = res.vx;
     this.vy = res.vy;
     this.vz = res.vz;
+    this.constrainRope(anchor.x, anchor.y, anchor.z);
 
-    const jumpedOut = input.jumpBufferTimer > 0 && this.grappleTimer > 0.08;
-    const releasedOut = !input.grappleHeld && this.grappleTimer > 0.18;
+    const jumpedOut = input.jumpBufferTimer > 0 && this.grappleTimer > 0.07;
+    const releasedOut = !input.grappleHeld && this.grappleTimer > 0.14;
 
     if (jumpedOut || releasedOut || res.grounded) {
       if (jumpedOut) input.jumpBufferTimer = 0;
       const slingshot = !res.grounded && (jumpedOut || releasedOut);
       if (slingshot) {
-        this.vy = Math.max(this.vy + (jumpedOut ? 4.2 : 2.6), jumpedOut ? 9.5 : 7.4);
-        this.vy = Math.min(this.vy, 13.4);
         const hs = this.horizSpeed;
-        const targetHs = Math.min(SLIDE_MAX_SPEED, Math.max(17.0, hs + 1.8));
-        if (hs > 1.0) {
-          this.vx = (this.vx / hs) * targetHs;
-          this.vz = (this.vz / hs) * targetHs;
+        if (jumpedOut) {
+          this.vy = Math.min(12.2, this.vy + 3.6);
+          this.vx += fx * 2.4;
+          this.vz += fz * 2.4;
+        } else if (this.vy > 1.2) {
+          // Let go on the way up — keep the arc, don't flatten into a scripted launch
+          this.vy = Math.min(11.0, this.vy + 1.1);
+        }
+        if (hs < 11.0 && hs > 0.2) {
+          const boost = 11.0 / hs;
+          this.vx *= boost;
+          this.vz *= boost;
+        } else if (hs > 26.0) {
+          const cap = 26.0 / hs;
+          this.vx *= cap;
+          this.vz *= cap;
         }
         this.justJumpedTimer = JUMP_LURCH_WINDOW;
-        this.events.onFovPunch?.(4.5);
+        this.events.onFovPunch?.(jumpedOut ? 4.2 : 2.6);
       }
 
       this.lastGrappleId = anchor.id;
       this.activeGrapple = null;
-      this.grappleCooldown = 0.12;
+      this.grappleCooldown = 0.1;
       this.grounded = res.grounded;
       this.currentRamp = res.onRamp;
       this.landingGraceTimer = res.grounded ? 0.15 : 0;
