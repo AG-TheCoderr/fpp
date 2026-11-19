@@ -8,8 +8,52 @@ import {
   Settings,
 } from './types';
 
-const SETTINGS_KEY = 'stride_settings_v1';
-const RECORDS_KEY = 'stride_records_v1';
+const DEVICE_KEY = 'stride_device_id';
+const LEGACY_SETTINGS = 'stride_settings_v1';
+const LEGACY_RECORDS = 'stride_records_v1';
+
+/** One id per browser profile — times never live in the app files or on the server. */
+export function getDeviceId(): string {
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (id && id.length >= 8) return id;
+    id =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `d_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(DEVICE_KEY, id);
+    return id;
+  } catch {
+    return 'memory';
+  }
+}
+
+function settingsKey(): string {
+  return `stride_${getDeviceId()}_settings`;
+}
+
+function recordsKey(): string {
+  return `stride_${getDeviceId()}_records`;
+}
+
+function migrateLegacy(): void {
+  try {
+    const sk = settingsKey();
+    const rk = recordsKey();
+    if (!localStorage.getItem(sk)) {
+      const old = localStorage.getItem(LEGACY_SETTINGS);
+      if (old) localStorage.setItem(sk, old);
+    }
+    if (!localStorage.getItem(rk)) {
+      const old = localStorage.getItem(LEGACY_RECORDS);
+      if (old) localStorage.setItem(rk, old);
+    }
+  } catch {
+    /* private mode */
+  }
+}
+
+migrateLegacy();
 
 export const DEFAULT_SETTINGS: Settings = {
   sensitivity: 1.0,
@@ -57,7 +101,7 @@ export function formatSplit(delta: number): string {
 
 export function loadSettings(): Settings {
   try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
+    const raw = localStorage.getItem(settingsKey());
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<Settings>;
     return {
@@ -85,7 +129,7 @@ export function loadSettings(): Settings {
 
 export function saveSettings(settings: Settings): void {
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    localStorage.setItem(settingsKey(), JSON.stringify(settings));
   } catch {
     // Ignore storage quota / iframe privacy restrictions
   }
@@ -93,7 +137,7 @@ export function saveSettings(settings: Settings): void {
 
 export function loadAllRecords(): Record<string, CourseRecord> {
   try {
-    const raw = localStorage.getItem(RECORDS_KEY);
+    const raw = localStorage.getItem(recordsKey());
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
@@ -122,7 +166,7 @@ export function saveCourseRecord(courseId: string, record: CourseRecord): void {
 
 export function clearAllRecords(): void {
   try {
-    localStorage.removeItem(RECORDS_KEY);
+    localStorage.removeItem(recordsKey());
   } catch {
     // Ignore
   }
