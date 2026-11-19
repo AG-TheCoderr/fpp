@@ -25,6 +25,12 @@ import { BuiltCourse } from './world/builder';
 import { COURSES } from './world/courses';
 import { FrustumCuller } from './world/culler';
 import { createMaterials } from './world/materials';
+import {
+  cameraFarForQuality,
+  fogColorFromSun,
+  fogDensityForQuality,
+  installHeightFog,
+} from './world/fog';
 import { SkySystem } from './world/sky';
 
 const FIXED_DT = 1 / 120;
@@ -85,17 +91,18 @@ class StrideGame {
     this.renderer.toneMappingExposure = 1.14;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    installHeightFog();
 
-    // 2. Scene & sunlit metropolitan haze
+    // 2. Scene & height-weighted metropolitan haze (hides far skyline so we pull camera.far)
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#c9e0f5');
-    this.scene.fog = new THREE.FogExp2('#d2e5f7', 0.00155);
+    this.scene.fog = new THREE.FogExp2('#d2e5f7', fogDensityForQuality(this.settings.graphics));
 
     this.camera = new THREE.PerspectiveCamera(
       this.settings.fov,
       window.innerWidth / window.innerHeight,
       0.1,
-      3200
+      cameraFarForQuality(this.settings.graphics)
     );
     this.scene.add(this.camera);
 
@@ -299,6 +306,11 @@ class StrideGame {
       .normalize();
     this.sky.setSunDirection(this.sunDir);
     this.viewModel.setSunDirection(this.sunDir);
+    const haze = fogColorFromSun(this.sunDir);
+    this.scene.background = haze.clone();
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      this.scene.fog.color.copy(haze);
+    }
 
     this.builtCourse = new BuiltCourse(course, this.mats);
     this.scene.add(this.builtCourse.group);
@@ -479,7 +491,12 @@ class StrideGame {
   private applyGraphics(q: GraphicsQuality): void {
     const low = q === 'low';
     const med = q === 'medium';
-    this.gfxDist = low ? 0.72 : med ? 0.88 : 1;
+    this.gfxDist = low ? 0.52 : med ? 0.7 : 0.86;
+    this.camera.far = cameraFarForQuality(q);
+    this.camera.updateProjectionMatrix();
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      this.scene.fog.density = fogDensityForQuality(q);
+    }
     this.sunLight.castShadow = !low;
     const mapRes = low ? 512 : med ? 1024 : 2048;
     this.sunLight.shadow.mapSize.set(mapRes, mapRes);
