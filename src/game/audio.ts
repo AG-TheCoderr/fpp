@@ -12,6 +12,14 @@ export class AudioEngine {
   private slideGain: GainNode | null = null;
   private slideFilter: BiquadFilterNode | null = null;
 
+  private windPanner: PannerNode | null = null;
+  private cityLPanner: PannerNode | null = null;
+  private cityRPanner: PannerNode | null = null;
+  private skyPanner: PannerNode | null = null;
+  private cityLGain: GainNode | null = null;
+  private cityRGain: GainNode | null = null;
+  private skyGain: GainNode | null = null;
+
   private volume = 0.75;
 
   setVolume(v: number): void {
@@ -71,9 +79,11 @@ export class AudioEngine {
     this.windFilter.Q.value = 0.4;
     this.windGain = ctx.createGain();
     this.windGain.gain.value = 0.008;
+    this.windPanner = this.makePanner(18, 140);
     windSrc.connect(this.windFilter);
     this.windFilter.connect(this.windGain);
-    this.windGain.connect(this.masterGain);
+    this.windGain.connect(this.windPanner);
+    this.windPanner.connect(this.masterGain);
     windSrc.start();
 
     const slideSrc = ctx.createBufferSource();
@@ -89,6 +99,165 @@ export class AudioEngine {
     this.slideFilter.connect(this.slideGain);
     this.slideGain.connect(this.masterGain);
     slideSrc.start();
+
+    this.cityLPanner = this.makePanner(22, 160);
+    this.cityRPanner = this.makePanner(22, 160);
+    this.skyPanner = this.makePanner(28, 200);
+    this.cityLGain = ctx.createGain();
+    this.cityRGain = ctx.createGain();
+    this.skyGain = ctx.createGain();
+    this.cityLGain.gain.value = 0.018;
+    this.cityRGain.gain.value = 0.016;
+    this.skyGain.gain.value = 0.012;
+
+    const humL = this.makeHum(62, 0.35);
+    const humR = this.makeHum(78, 0.32);
+    const air = this.makeAirBed();
+    humL.connect(this.cityLGain);
+    this.cityLGain.connect(this.cityLPanner);
+    this.cityLPanner.connect(this.masterGain);
+    humR.connect(this.cityRGain);
+    this.cityRGain.connect(this.cityRPanner);
+    this.cityRPanner.connect(this.masterGain);
+    air.connect(this.skyGain);
+    this.skyGain.connect(this.skyPanner);
+    this.skyPanner.connect(this.masterGain);
+  }
+
+  private makePanner(ref: number, max: number): PannerNode {
+    const p = this.ctx!.createPanner();
+    p.panningModel = 'equalpower';
+    p.distanceModel = 'inverse';
+    p.refDistance = ref;
+    p.maxDistance = max;
+    p.rolloffFactor = 0.85;
+    p.coneInnerAngle = 360;
+    p.coneOuterAngle = 360;
+    return p;
+  }
+
+  private makeHum(freq: number, mix: number): GainNode {
+    const ctx = this.ctx!;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 140;
+    const g = ctx.createGain();
+    g.gain.value = mix * 0.04;
+    osc.connect(lp);
+    lp.connect(g);
+    osc.start();
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    const nlp = ctx.createBiquadFilter();
+    nlp.type = 'lowpass';
+    nlp.frequency.value = 220;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.012;
+    src.connect(nlp);
+    nlp.connect(ng);
+    ng.connect(g);
+    src.start();
+    return g;
+  }
+
+  private makeAirBed(): GainNode {
+    const ctx = this.ctx!;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'lowpass';
+    bp.frequency.value = 640;
+    bp.Q.value = 0.3;
+    const g = ctx.createGain();
+    g.gain.value = 1;
+    src.connect(bp);
+    bp.connect(g);
+    src.start();
+    return g;
+  }
+
+  /** Place listener at the camera; park wind/city/sky around the runner. */
+  updateListener(
+    x: number,
+    y: number,
+    z: number,
+    fx: number,
+    fy: number,
+    fz: number,
+    ux: number,
+    uy: number,
+    uz: number,
+    sx: number,
+    sy: number,
+    sz: number,
+    active: boolean
+  ): void {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const l = this.ctx.listener;
+    const set = (
+      param: AudioParam | undefined,
+      v: number,
+      fallback: () => void
+    ) => {
+      if (param) param.setTargetAtTime(v, now, 0.04);
+      else fallback();
+    };
+    set(l.positionX, x, () => l.setPosition(x, y, z));
+    set(l.positionY, y, () => {});
+    set(l.positionZ, z, () => {});
+    if (l.forwardX) {
+      l.forwardX.setTargetAtTime(fx, now, 0.04);
+      l.forwardY.setTargetAtTime(fy, now, 0.04);
+      l.forwardZ.setTargetAtTime(fz, now, 0.04);
+      l.upX.setTargetAtTime(ux, now, 0.04);
+      l.upY.setTargetAtTime(uy, now, 0.04);
+      l.upZ.setTargetAtTime(uz, now, 0.04);
+    } else if (typeof l.setOrientation === 'function') {
+      l.setOrientation(fx, fy, fz, ux, uy, uz);
+    }
+
+    const rx = fy * uz - fz * uy;
+    const ry = fz * ux - fx * uz;
+    const rz = fx * uy - fy * ux;
+    const rlen = Math.hypot(rx, ry, rz) || 1;
+
+    this.setPanner(this.windPanner, x + sx * 22, y + sy * 22 + 4, z + sz * 22);
+    this.setPanner(
+      this.cityLPanner,
+      x - (rx / rlen) * 36,
+      y - 6,
+      z - (rz / rlen) * 36
+    );
+    this.setPanner(
+      this.cityRPanner,
+      x + (rx / rlen) * 40,
+      y - 4,
+      z + (rz / rlen) * 40
+    );
+    this.setPanner(this.skyPanner, x + fx * 8, y + 28, z + fz * 8);
+
+    const bed = active ? 1 : 0.35;
+    this.cityLGain?.gain.setTargetAtTime(0.018 * bed, now, 0.12);
+    this.cityRGain?.gain.setTargetAtTime(0.016 * bed, now, 0.12);
+    this.skyGain?.gain.setTargetAtTime(0.012 * bed, now, 0.12);
+  }
+
+  private setPanner(p: PannerNode | null, x: number, y: number, z: number): void {
+    if (!p || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    if (p.positionX) {
+      p.positionX.setTargetAtTime(x, now, 0.05);
+      p.positionY.setTargetAtTime(y, now, 0.05);
+      p.positionZ.setTargetAtTime(z, now, 0.05);
+    } else {
+      p.setPosition(x, y, z);
+    }
   }
 
   updateContinuous(
@@ -127,7 +296,7 @@ export class AudioEngine {
   playFootstep(speed: number, isWall: boolean, foot: -1 | 1 = 1): void {
     const vol = Math.min(0.11, (0.04 + (speed / 24) * 0.06) * (isWall ? 0.8 : 1));
     const f = (isWall ? 148 : 92) * (foot < 0 ? 0.97 : 1.03);
-    this.playThump(f, vol, 0.05);
+    this.playThump(f, vol, 0.05, foot * 0.28);
   }
 
   playPivot(intensity: number): void {
@@ -208,12 +377,14 @@ export class AudioEngine {
     this.playToneSweep(accent ? 620 : 440, accent ? 740 : 380, 0.035, 0.035, 'sine');
   }
 
-  private playThump(freq: number, vol: number, dur: number): void {
+  private playThump(freq: number, vol: number, dur: number, pan = 0): void {
     if (!this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
     const lp = this.ctx.createBiquadFilter();
+    const stereo = this.ctx.createStereoPanner();
+    stereo.pan.setValueAtTime(Math.max(-0.85, Math.min(0.85, pan)), now);
     lp.type = 'lowpass';
     lp.frequency.value = 420;
     osc.type = 'sine';
@@ -223,7 +394,8 @@ export class AudioEngine {
     g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
     osc.connect(lp);
     lp.connect(g);
-    g.connect(this.masterGain);
+    g.connect(stereo);
+    stereo.connect(this.masterGain);
     osc.start(now);
     osc.stop(now + dur + 0.02);
   }
