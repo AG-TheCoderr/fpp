@@ -384,6 +384,99 @@ export function createMaterials(maxAnisotropy: number): MaterialLibrary {
   const finishBannerTex = finalizeTexture(fbC, true, aniso);
 
   // Stencil cache for architectural rooftop sector codes (R-01, A-02, FIN)
+  const patchLook = (
+    mat: THREE.MeshStandardMaterial,
+    kind: 'ao' | 'rim' | 'glass' | 'shaft'
+  ): THREE.MeshStandardMaterial => {
+    mat.customProgramCacheKey = () => `stride-look-${kind}-v1`;
+    mat.onBeforeCompile = (shader) => {
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          '#include <common>',
+          /* glsl */ `
+          #include <common>
+          varying vec3 vStrideW;
+          varying vec3 vStrideN;
+          `
+        )
+        .replace(
+          '#include <worldpos_vertex>',
+          /* glsl */ `
+          #include <worldpos_vertex>
+          vStrideW = worldPosition.xyz;
+          vStrideN = inverseTransformDirection(transformedNormal, viewMatrix);
+          `
+        );
+
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          /* glsl */ `
+          #include <common>
+          varying vec3 vStrideW;
+          varying vec3 vStrideN;
+          `
+        )
+        .replace(
+          '#include <map_fragment>',
+          kind === 'glass' || kind === 'shaft'
+            ? /* glsl */ `
+#ifdef USE_MAP
+  vec3 nw = abs(normalize(vStrideN));
+  vec3 nw3 = nw / max(nw.x + nw.y + nw.z, 0.001);
+  float tScale = ${kind === 'glass' ? '0.085' : '0.055'};
+  vec4 tX = texture2D(map, vStrideW.zy * tScale);
+  vec4 tY = texture2D(map, vStrideW.xz * tScale);
+  vec4 tZ = texture2D(map, vStrideW.xy * tScale);
+  vec4 sampledDiffuseColor = tX * nw3.x + tY * nw3.y + tZ * nw3.z;
+  diffuseColor *= sampledDiffuseColor;
+#endif
+`
+            : '#include <map_fragment>'
+        )
+        .replace(
+          '#include <color_fragment>',
+          /* glsl */ `
+          #include <color_fragment>
+          {
+            vec3 nW = normalize(vStrideN);
+            vec3 viewW = normalize(cameraPosition - vStrideW);
+            float nv = 1.0 - abs(dot(nW, viewW));
+            ${
+              kind === 'ao' || kind === 'shaft'
+                ? `
+            float ao = 1.0 - 0.24 * pow(1.0 - abs(nW.y), 1.55);
+            ao *= mix(1.0, 0.76, smoothstep(0.12, 0.82, -nW.y));
+            diffuseColor.rgb *= ao;
+            `
+                : ''
+            }
+            ${
+              kind === 'rim'
+                ? `
+            float rim = pow(nv, 3.2);
+            diffuseColor.rgb += vec3(1.0, 0.16, 0.07) * rim * 0.55;
+            `
+                : ''
+            }
+            ${
+              kind === 'glass'
+                ? `
+            float fres = pow(nv, 2.8);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.90, 1.0), fres * 0.42);
+            vec2 cell = floor(vec2(vStrideW.x, vStrideW.y) * 0.42);
+            float lit = step(0.68, fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453));
+            diffuseColor.rgb += vec3(1.0, 0.86, 0.58) * lit * 0.09 * (1.0 - fres);
+            `
+                : ''
+            }
+          }
+          `
+        );
+    };
+    return mat;
+  };
+
   const stencilCache = new Map<string, THREE.CanvasTexture>();
   const makeStencilTexture = (label: string): THREE.CanvasTexture => {
     const existing = stencilCache.get(label);
@@ -405,67 +498,101 @@ export function createMaterials(maxAnisotropy: number): MaterialLibrary {
   };
 
   return {
-    roofTop: new THREE.MeshStandardMaterial({
-      map: roofTex,
-      bumpMap: concreteBump,
-      bumpScale: 0.018,
-      roughness: 0.82,
-      metalness: 0.02,
-    }),
-    whiteConcrete: new THREE.MeshStandardMaterial({
-      map: whiteConcreteTex,
-      bumpMap: concreteBump,
-      bumpScale: 0.02,
-      roughness: 0.78,
-      metalness: 0.02,
-    }),
-    darkConcrete: new THREE.MeshStandardMaterial({
-      map: darkConcreteTex,
-      bumpMap: concreteBump,
-      bumpScale: 0.025,
-      roughness: 0.85,
-      metalness: 0.05,
-    }),
-    runnerRed: new THREE.MeshStandardMaterial({
-      map: runnerRedTex,
-      roughness: 0.42,
-      metalness: 0.08,
-    }),
-    runnerChevron: new THREE.MeshStandardMaterial({
-      map: chevronTex,
-      roughness: 0.4,
-      metalness: 0.08,
-    }),
-    wallRunRed: new THREE.MeshStandardMaterial({
-      map: wallRunTex,
-      roughness: 0.46,
-      metalness: 0.06,
-    }),
-    slideHazard: new THREE.MeshStandardMaterial({
-      map: slideTex,
-      roughness: 0.48,
-      metalness: 0.14,
-    }),
-    slideChute: new THREE.MeshStandardMaterial({
-      map: slideChuteTex,
-      roughness: 0.35,
-      metalness: 0.06,
-    }),
-    catwalk: new THREE.MeshStandardMaterial({
-      color: '#e52b1e',
-      roughness: 0.36,
-      metalness: 0.25,
-    }),
-    glassFacade: new THREE.MeshStandardMaterial({
-      map: glassTex,
-      roughness: 0.26,
-      metalness: 0.35,
-    }),
-    distantTowerA: new THREE.MeshStandardMaterial({
-      map: distantTex,
-      roughness: 0.55,
-      metalness: 0.12,
-    }),
+    roofTop: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: roofTex,
+        bumpMap: concreteBump,
+        bumpScale: 0.018,
+        roughness: 0.82,
+        metalness: 0.02,
+      }),
+      'ao'
+    ),
+    whiteConcrete: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: whiteConcreteTex,
+        bumpMap: concreteBump,
+        bumpScale: 0.02,
+        roughness: 0.78,
+        metalness: 0.02,
+      }),
+      'ao'
+    ),
+    darkConcrete: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: darkConcreteTex,
+        bumpMap: concreteBump,
+        bumpScale: 0.025,
+        roughness: 0.85,
+        metalness: 0.05,
+      }),
+      'ao'
+    ),
+    runnerRed: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: runnerRedTex,
+        roughness: 0.42,
+        metalness: 0.08,
+      }),
+      'rim'
+    ),
+    runnerChevron: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: chevronTex,
+        roughness: 0.4,
+        metalness: 0.08,
+      }),
+      'rim'
+    ),
+    wallRunRed: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: wallRunTex,
+        roughness: 0.46,
+        metalness: 0.06,
+      }),
+      'rim'
+    ),
+    slideHazard: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: slideTex,
+        roughness: 0.48,
+        metalness: 0.14,
+      }),
+      'rim'
+    ),
+    slideChute: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: slideChuteTex,
+        roughness: 0.35,
+        metalness: 0.06,
+      }),
+      'ao'
+    ),
+    catwalk: patchLook(
+      new THREE.MeshStandardMaterial({
+        color: '#e52b1e',
+        roughness: 0.36,
+        metalness: 0.25,
+      }),
+      'rim'
+    ),
+    glassFacade: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: glassTex,
+        roughness: 0.18,
+        metalness: 0.55,
+        envMapIntensity: 1.25,
+      }),
+      'glass'
+    ),
+    distantTowerA: patchLook(
+      new THREE.MeshStandardMaterial({
+        map: distantTex,
+        roughness: 0.55,
+        metalness: 0.12,
+      }),
+      'shaft'
+    ),
     distantTowerB: new THREE.MeshStandardMaterial({
       color: '#dce7f3',
       roughness: 0.65,
