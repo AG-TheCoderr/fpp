@@ -812,6 +812,20 @@ export class PhysicsWorld {
     return this.findBestGrapple(eyeX, eyeY, eyeZ, lookX, lookY, lookZ, excludeId);
   }
 
+  /** Highest walkable deck under xz, or null. */
+  roofAt(x: number, z: number): number | null {
+    let best = -Infinity;
+    for (let i = 0; i < this.boxes.length; i++) {
+      const b = this.boxes[i];
+      if (b.style === 'vault' || b.style === 'slide' || b.style === 'wallrun') continue;
+      if (x < b.minX + 0.2 || x > b.maxX - 0.2 || z < b.minZ + 0.2 || z > b.maxZ - 0.2) {
+        continue;
+      }
+      if (b.maxY > best) best = b.maxY;
+    }
+    return best === -Infinity ? null : best;
+  }
+
   /**
    * Check if player crossed a checkpoint volume (generous vertical height so air jumps count!).
    */

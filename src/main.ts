@@ -8,6 +8,7 @@ import { InputManager } from './game/input';
 import { PhysicsWorld } from './game/physics';
 import { Player } from './game/player';
 import { VelocityMotionBlur } from './game/postfx';
+import { RunnerVision } from './game/vision';
 import { ViewModel } from './game/viewmodel';
 import {
   computeRank,
@@ -57,6 +58,7 @@ class StrideGame {
   private fx: EffectsSystem;
   private ghost: GhostSystem;
   private viewModel: ViewModel;
+  private vision: RunnerVision;
   private cameraRig: CameraRig;
   private input: InputManager;
   private ui: GameUI;
@@ -148,6 +150,10 @@ class StrideGame {
     this.viewModel = new ViewModel();
     this.scene.add(this.viewModel.ropeMesh);
     this.viewModel.setVisible(false);
+
+    this.vision = new RunnerVision();
+    this.scene.add(this.vision.group);
+    this.vision.setActive(false);
 
     this.cameraRig = new CameraRig(this.camera);
 
@@ -345,6 +351,7 @@ class StrideGame {
     this.cameraRig.reset(this.settings.fov);
     this.motionBlur.resetVelocity();
     this.viewModel.setVisible(true);
+    this.vision.setActive(true);
     this.input.clearInputs();
     this.input.gameplayActive = true;
     this.input.finishedActive = false;
@@ -364,6 +371,7 @@ class StrideGame {
     this.player.resetCourse(true);
     this.motionBlur.resetVelocity();
     this.viewModel.setVisible(true);
+    this.vision.setActive(true);
     this.input.clearInputs();
     this.input.gameplayActive = true;
     this.input.finishedActive = false;
@@ -446,6 +454,7 @@ class StrideGame {
     this.input.exitLock();
     this.input.touch.setActive(false);
     this.viewModel.setVisible(false);
+    this.vision.setActive(false);
 
     this.ui.showFinished({
       course,
@@ -469,6 +478,7 @@ class StrideGame {
     this.input.clearInputs();
     this.input.exitLock();
     this.viewModel.setVisible(false);
+    this.vision.setActive(false);
     this.input.touch.setActive(false);
     this.ghost.resetRun();
     this.ui.showTitle(this.courseIndex);
@@ -481,6 +491,7 @@ class StrideGame {
     this.input.clearInputs();
     this.input.exitLock();
     this.viewModel.setVisible(false);
+    this.vision.setActive(false);
     this.input.touch.setActive(false);
     this.ghost.resetRun();
     this.ui.showCourses(this.courseIndex);
@@ -592,6 +603,7 @@ class StrideGame {
           this.input.state.right
         );
         this.viewModel.update(this.player, dt, this.camera);
+        this.vision.update(this.player, this.physicsWorld, dt);
         this.ghost.updatePlayback(this.player, this.settings.showGhost);
         this.culler.update(this.camera);
         this.builtCourse?.update(
