@@ -819,6 +819,232 @@ const COURSE_08: CourseDef = {
   ],
 };
 
+type LaneKind = 'flow' | 'climb' | 'drop' | 'zag' | 'web' | 'walls' | 'narrow';
+
+const EXTRA_LANES: { id: string; name: string; kind: LaneKind }[] = [
+  { id: 'needle', name: 'NEEDLE', kind: 'climb' },
+  { id: 'gutter', name: 'GUTTER', kind: 'drop' },
+  { id: 'ridge', name: 'RIDGE', kind: 'flow' },
+  { id: 'choke', name: 'CHOKE', kind: 'narrow' },
+  { id: 'span', name: 'SPAN', kind: 'web' },
+  { id: 'teeth', name: 'TEETH', kind: 'walls' },
+  { id: 'drift', name: 'DRIFT', kind: 'zag' },
+  { id: 'pier', name: 'PIER', kind: 'flow' },
+  { id: 'knife', name: 'KNIFE', kind: 'narrow' },
+  { id: 'stack', name: 'STACK', kind: 'climb' },
+  { id: 'bend', name: 'BEND', kind: 'zag' },
+  { id: 'glare', name: 'GLARE', kind: 'drop' },
+  { id: 'hush', name: 'HUSH', kind: 'web' },
+  { id: 'rush', name: 'RUSH', kind: 'flow' },
+  { id: 'crook', name: 'CROOK', kind: 'zag' },
+  { id: 'split', name: 'SPLIT', kind: 'walls' },
+  { id: 'well', name: 'WELL', kind: 'climb' },
+  { id: 'crest', name: 'CREST', kind: 'drop' },
+  { id: 'dusk', name: 'DUSK', kind: 'web' },
+  { id: 'grid', name: 'GRID', kind: 'flow' },
+  { id: 'snap', name: 'SNAP', kind: 'walls' },
+  { id: 'lane', name: 'LANE', kind: 'narrow' },
+  { id: 'wire', name: 'WIRE', kind: 'web' },
+  { id: 'fold', name: 'FOLD', kind: 'zag' },
+];
+
+function extraCourse(
+  num: number,
+  id: string,
+  name: string,
+  kind: LaneKind
+): CourseDef {
+  const code = String(num).padStart(2, '0');
+  const boxes: BoxDef[] = [];
+  const ramps: CourseDef['ramps'] = [];
+  const grapples: CourseDef['grapples'] = [];
+  const launchPads: CourseDef['launchPads'] = [];
+  const checkpoints: CourseDef['checkpoints'] = [];
+  const prompts: CourseDef['prompts'] = [];
+
+  let x = 0;
+  let y = kind === 'drop' ? 14 : kind === 'climb' ? 0 : kind === 'web' ? -2 : 0;
+  let z = -6;
+  const width = kind === 'narrow' ? 8.5 : 13.5;
+  const segs = 5;
+  let finX = 0;
+  let finY = y;
+  let finZ = -80;
+
+  boxes.push(
+    roof(x, y, z - 10, width, 22, { guideDir: '-z', label: `${code}` })
+  );
+  z -= 22;
+
+  for (let s = 0; s < segs; s++) {
+    const gap = kind === 'web' ? 16 + (s % 2) * 4 : kind === 'narrow' ? 6.5 : 8.5 + (s % 3);
+    const midZ = z - gap * 0.5;
+
+    if (kind === 'web' || (kind === 'flow' && s === 2)) {
+      grapples.push({
+        id: `${id}-g${s}`,
+        x,
+        y: y + 9.5,
+        z: midZ,
+        radius: 27,
+        mountSide: s % 2 === 0 ? '+x' : '-x',
+      });
+      boxes.push(
+        roof(x + (s % 2 === 0 ? 14 : -14), y + 7, midZ, 11, 11, {
+          cleanRoof: true,
+          noShaft: true,
+        })
+      );
+    }
+
+    if (kind === 'walls') {
+      const left = s % 2 === 0;
+      boxes.push(
+        wallPanel(
+          `${id}-w${s}`,
+          left ? -4.0 : 4.0,
+          y - 5.5,
+          midZ,
+          1.6,
+          9.0,
+          Math.max(12, gap + 2),
+          left ? '+x' : '-x'
+        )
+      );
+      boxes.push(
+        roof(left ? -13 : 13, y + 8, midZ, 14, gap + 6, {
+          noCollide: true,
+          cleanRoof: true,
+        })
+      );
+    }
+
+    if (kind === 'climb' && s > 0) {
+      ramps.push({
+        x,
+        y: y,
+        z: midZ,
+        w: 10,
+        h: 3.1,
+        d: Math.max(8, gap - 1),
+        dir: '-z',
+        style: s % 2 ? 'rampRed' : 'rampConcrete',
+      });
+    }
+    if (kind === 'drop') {
+      ramps.push({
+        x,
+        y: y - 3.2,
+        z: midZ,
+        w: 10.5,
+        h: 3.2,
+        d: Math.max(8, gap),
+        dir: '+z',
+        style: 'rampConcrete',
+      });
+    }
+
+    z -= gap;
+    if (kind === 'climb') y += 3.1;
+    if (kind === 'drop') y -= 3.2;
+    if (kind === 'zag') x += s % 2 === 0 ? 16 : -16;
+
+    const len = kind === 'narrow' ? 14 : 17 + (s % 2) * 5;
+    const cz = z - len * 0.5;
+    const last = s === segs - 1;
+    boxes.push(
+      roof(x, y, cz, last ? width + 2 : width, len, {
+        guideDir: '-z',
+        label: last ? 'FIN' : undefined,
+        cleanRoof: kind === 'drop' && !last,
+      })
+    );
+
+    if (kind !== 'web' && s % 2 === 0) {
+      boxes.push(vault(x, y, cz + 3, Math.min(7, width - 2), 1.1, 1.0));
+    }
+    if (kind === 'flow' && s % 3 === 1) {
+      boxes.push(slideGate(x, y, cz, width - 2, 2.0, 1.18, 1.8));
+    }
+    if (kind === 'narrow') {
+      boxes.push(catwalk(x + (width * 0.5 + 1.4), y + 1.2, cz, 1.8, len * 0.8, '-z'));
+    }
+    if (kind === 'drop' && s === 3) {
+      launchPads.push({
+        x,
+        y,
+        z: cz - 4,
+        w: 3.6,
+        d: 3.6,
+        vx: 0,
+        vy: 11,
+        vz: -14,
+      });
+    }
+
+    if (s === 1 || s === 3) {
+      checkpoints.push({
+        index: checkpoints.length,
+        x,
+        y,
+        z: cz + 2,
+        w: width - 1,
+        d: 3.2,
+        spawnYaw: 0,
+        axis: 'z',
+      });
+    }
+
+    if (last) {
+      finX = x;
+      finY = y;
+      finZ = cz - 4;
+    }
+    z -= len;
+  }
+  if (kind === 'web') {
+    prompts.push({ x: 0, y: y + 6, z: -40, key: 'RMB', action: 'WEB', radius: 18 });
+  }
+
+  const ranks =
+    kind === 'web'
+      ? { S: 20, A: 25, B: 32, C: 42 }
+      : kind === 'climb'
+        ? { S: 18, A: 23, B: 30, C: 40 }
+        : kind === 'drop'
+          ? { S: 15, A: 19, B: 25, C: 34 }
+          : { S: 16.5, A: 21, B: 27, C: 36 };
+
+  return {
+    id,
+    code,
+    name,
+    spawn: [0, kind === 'drop' ? 14 : kind === 'web' ? -2 : 0, -2],
+    spawnYaw: 0,
+    killY: kind === 'web' ? -40 : -32,
+    sunAzimuth: ((num * 0.73) % 6.2) - 3.1,
+    sunElevation:
+      kind === 'web' ? 0.3 : kind === 'drop' ? 0.78 : 0.45 + (num % 4) * 0.08,
+    ranks,
+    boxes,
+    ramps,
+    launchPads,
+    grapples,
+    checkpoints,
+    finish: { x: finX, y: finY, z: finZ, w: width - 1, d: 3.8, axis: 'z' },
+    prompts,
+    flyover: [
+      {
+        from: [-12, y + 10, 4],
+        to: [finX - 8, finY + 8, finZ + 16],
+        lookFrom: [2, y + 2, -30],
+        lookTo: [finX, finY + 2, finZ],
+        duration: 8.5,
+      },
+    ],
+  };
+}
+
 /** Scatter extra walkable rooftops around a course so you can web and land off-track. */
 function sprinklePlayground(course: CourseDef): CourseDef {
   let minX = Infinity;
@@ -886,13 +1112,18 @@ function sprinklePlayground(course: CourseDef): CourseDef {
   return course;
 }
 
-export const COURSES: CourseDef[] = [
-  sprinklePlayground(COURSE_01),
-  sprinklePlayground(COURSE_02),
-  sprinklePlayground(COURSE_03),
-  sprinklePlayground(COURSE_04),
-  sprinklePlayground(COURSE_05),
-  sprinklePlayground(COURSE_06),
-  sprinklePlayground(COURSE_07),
-  sprinklePlayground(COURSE_08),
+const HAND: CourseDef[] = [
+  COURSE_01,
+  COURSE_02,
+  COURSE_03,
+  COURSE_04,
+  COURSE_05,
+  COURSE_06,
+  COURSE_07,
+  COURSE_08,
 ];
+
+export const COURSES: CourseDef[] = [
+  ...HAND,
+  ...EXTRA_LANES.map((spec, i) => extraCourse(9 + i, spec.id, spec.name, spec.kind)),
+].map((c) => sprinklePlayground(c));
