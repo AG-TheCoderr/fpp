@@ -199,37 +199,44 @@ const BLUR_FRAG = /* glsl */ `
     float vig = smoothstep(0.15, 1.05, radial);
     color *= 1.0 - vig * (0.22 + uPunch * 0.18) * uFxStrength;
 
-    // Soft dispersed shafts: fewer radial taps, perpendicular dither, haze not needles
+    // Soft dispersed shafts: wider haze when looking into the sun so spokes don't cut the frame
     if (uGodRays > 0.01 && uSunOn > 0.01) {
       vec2 toSun = uSunUV - vUv;
       float distSun = length(toSun);
-      if (distSun < 0.82) {
+      float lookIn = 1.0 - smoothstep(0.06, 0.38, length(uSunUV - vec2(0.5)));
+      if (distSun < mix(0.82, 1.05, lookIn)) {
         float jitterG = ign(gl_FragCoord.xy + vec2(uFrameJitter * 41.0, 11.0));
+        float jitterB = ign(gl_FragCoord.yx + vec2(17.0, uFrameJitter * 23.0));
         int GN = int(uGodSamples + 0.5);
-        float decay = 0.78;
+        float decay = mix(0.78, 0.70, lookIn);
         float weight = 1.0;
         float sum = 0.0;
         float wSumG = 0.001;
-        vec2 stepUv = toSun * (1.15 / max(float(GN), 1.0));
+        vec2 stepUv = toSun * (mix(1.15, 0.72, lookIn) / max(float(GN), 1.0));
         vec2 perp = vec2(-stepUv.y, stepUv.x);
-        vec2 gUv = vUv + perp * (jitterG - 0.5) * 0.85;
+        float spread = mix(0.9, 3.4, lookIn);
+        vec2 gUv = vUv + perp * (jitterG - 0.5) * spread + stepUv * (jitterB - 0.5) * lookIn;
         for (int gi = 0; gi < 8; gi++) {
           if (gi >= GN) break;
           gUv += stepUv;
           if (gUv.x < 0.0 || gUv.x > 1.0 || gUv.y < 0.0 || gUv.y > 1.0) break;
           float gd = texture2D(tDepth, gUv).r;
-          float sky = smoothstep(0.993, 0.9994, gd);
-          if (sky > 0.04) {
-            float energy = max(luma(texture2D(tColor, gUv).rgb) - 0.42, 0.0) * sky;
+          float sky = smoothstep(mix(0.993, 0.985, lookIn), 0.9995, gd);
+          if (sky > 0.03) {
+            float energy = max(luma(texture2D(tColor, gUv).rgb) - mix(0.42, 0.28, lookIn), 0.0) * sky;
             sum += energy * weight;
           }
           wSumG += weight;
           weight *= decay;
         }
-        float shafts = pow(max(sum / wSumG, 0.0), 0.68) * exp(-distSun * 0.52);
-        float fg = smoothstep(0.88, 0.998, centerDepth);
-        shafts *= mix(0.12, 1.0, fg);
-        color += vec3(1.02, 0.94, 0.78) * shafts * (0.72 * uGodRays * uSunOn);
+        float haze = pow(max(sum / wSumG, 0.0), mix(0.68, 0.48, lookIn));
+        float radialSoft = exp(-distSun * mix(0.52, 1.15, lookIn));
+        float edgeFeather = smoothstep(0.0, mix(0.04, 0.14, lookIn), distSun);
+        float shafts = haze * radialSoft * edgeFeather;
+        float fg = smoothstep(0.82, 0.998, centerDepth);
+        shafts *= mix(0.10, 1.0, fg);
+        float veil = lookIn * exp(-distSun * distSun * 9.0) * 0.22;
+        color += vec3(1.02, 0.94, 0.80) * (shafts * 0.62 + veil) * uGodRays * uSunOn;
       }
     }
 
@@ -393,9 +400,9 @@ export class VelocityMotionBlur {
     this.material.uniforms.uSunUV.value.set(uvx, uvy);
     let on = 0;
     if (this.sunNdc.z < 1) {
-      const ox = Math.max(0, Math.abs(uvx - 0.5) - 0.58);
-      const oy = Math.max(0, Math.abs(uvy - 0.5) - 0.58);
-      on = Math.max(0, 1 - (ox + oy) * 2.8);
+      const ox = Math.max(0, Math.abs(uvx - 0.5) - 0.62);
+      const oy = Math.max(0, Math.abs(uvy - 0.5) - 0.62);
+      on = Math.max(0, 1 - (ox + oy) * 2.1);
       on *= THREE.MathUtils.smoothstep(sunDir.y, -0.04, 0.18);
     }
     this.material.uniforms.uSunOn.value = on;
