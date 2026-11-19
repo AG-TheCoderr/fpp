@@ -186,6 +186,20 @@ export interface Settings {
   foliage: FoliageDensity;   // default 'high'
   showGhost: boolean;        // default true
   showFps: boolean;          // default false
+  /** On-screen pad scale 0.7–1.5 */
+  touchSize: number;
+  /** Pad opacity 0.2–1 */
+  touchOpacity: number;
+  /** Stick inset from left, 0–28 (%) */
+  stickX: number;
+  /** Stick inset from bottom, 0–40 (%) */
+  stickY: number;
+  /** Action cluster inset from right, 0–28 (%) */
+  actionsX: number;
+  /** Action cluster inset from bottom, 0–40 (%) */
+  actionsY: number;
+  /** Pause cluster from top, 0–80 (%) — slide down if the notch is in the way */
+  sysY: number;
 }
 
 export interface GhostFrame {
