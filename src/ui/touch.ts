@@ -1,3 +1,5 @@
+import type { Settings } from '../types';
+
 export type TouchAction = 'jump' | 'slide' | 'grapple' | 'pause' | 'restart' | 'checkpoint';
 
 export interface TouchInputSnapshot {
