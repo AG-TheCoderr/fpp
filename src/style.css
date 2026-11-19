@@ -319,8 +319,28 @@ body,
 .course-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   width: min(560px, 88vw);
+  max-height: min(58vh, 640px);
+  overflow-y: auto;
+  padding-right: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.course-tools {
+  display: flex;
+  gap: 10px;
+  width: min(560px, 88vw);
+  margin-bottom: 10px;
+}
+
+.brand-track {
+  margin: 8px 0 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  opacity: 0.55;
 }
 
 .course-row {

@@ -459,11 +459,7 @@ class StrideGame {
   }
 
   private nextCourse(): void {
-    if (this.courseIndex < COURSES.length - 1) {
-      this.startCourse(this.courseIndex + 1);
-    } else {
-      this.goCourses();
-    }
+    this.startCourse((this.courseIndex + 1) % COURSES.length);
   }
 
   private goTitle(): void {

@@ -340,6 +340,7 @@ export class GameUI {
         <div class="brand">
           <span class="brand-slash"></span>
           <h1 class="brand-title">STRIDE</h1>
+          <p class="brand-track">${this.courses[this.selectedCourseIdx]?.code ?? ''} ${this.courses[this.selectedCourseIdx]?.name ?? ''}</p>
         </div>
         <nav class="menu-nav">
           <button class="menu-btn is-primary" data-act="play">PLAY</button>
@@ -399,8 +400,12 @@ export class GameUI {
         <div class="section-header">
           <span class="section-bar"></span>
           <h2 class="section-title">COURSES</h2>
+          <span class="section-sub">${this.courses.length} TRACKS</span>
         </div>
-        <div class="course-list">${rowsHtml}</div>
+        <div class="course-tools">
+          <button class="menu-btn is-primary" data-act="random">RANDOM</button>
+        </div>
+        <div class="course-list" id="course-list" tabindex="0">${rowsHtml}</div>
         <button class="menu-btn is-back" data-act="back">BACK</button>
       </div>
     `;
@@ -421,8 +426,40 @@ export class GameUI {
         this.cb.onPlayCourse(idx);
       });
     });
+    this.root.querySelector('.course-row.is-active')?.scrollIntoView({ block: 'center' });
+
+    const list = this.root.querySelector<HTMLElement>('#course-list');
+    list?.focus();
+    list?.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const dir = e.key === 'ArrowDown' ? 1 : -1;
+        const next = Math.max(
+          0,
+          Math.min(this.courses.length - 1, this.selectedCourseIdx + dir)
+        );
+        if (next !== this.selectedCourseIdx) {
+          this.selectedCourseIdx = next;
+          this.root.querySelectorAll('.course-row').forEach((el, i) => {
+            el.classList.toggle('is-active', i === next);
+            if (i === next) el.scrollIntoView({ block: 'nearest' });
+          });
+          this.cb.onPreviewCourse(next);
+        }
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.cb.onUiSound(true);
+        this.cb.onPlayCourse(this.selectedCourseIdx);
+      }
+    });
 
     this.bindMenuButtons({
+      random: () => {
+        const idx = Math.floor(Math.random() * this.courses.length);
+        this.cb.onUiSound(true);
+        this.cb.onPlayCourse(idx);
+      },
       back: () => {
         this.cb.onUiSound();
         this.cb.onGoTitle();
@@ -705,6 +742,7 @@ export class GameUI {
           <button class="menu-btn" data-act="checkpoint">CHECKPOINT</button>
           <button class="menu-btn" data-act="controls">CONTROLS</button>
           <button class="menu-btn" data-act="settings">SETTINGS</button>
+          <button class="menu-btn" data-act="next">NEXT TRACK</button>
           <button class="menu-btn" data-act="courses">COURSES</button>
           <button class="menu-btn is-back" data-act="title">QUIT</button>
         </nav>
@@ -733,6 +771,10 @@ export class GameUI {
         this.cb.onUiSound();
         this.subPanel = 'settings';
         this.renderPause(course);
+      },
+      next: () => {
+        this.cb.onUiSound(true);
+        this.cb.onNextCourse();
       },
       courses: () => {
         this.cb.onUiSound();
