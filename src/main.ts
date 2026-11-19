@@ -124,7 +124,7 @@ class StrideGame {
 
     // 4. World, post-FX & game systems
     this.mats = createMaterials(this.renderer.capabilities.getMaxAnisotropy());
-    this.sky = new SkySystem();
+    this.sky = new SkySystem(this.renderer, this.scene);
     this.scene.add(this.sky.group);
 
     this.motionBlur = new VelocityMotionBlur(this.renderer);
