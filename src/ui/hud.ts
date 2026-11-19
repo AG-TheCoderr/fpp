@@ -341,6 +341,7 @@ export class GameUI {
           <span class="brand-slash"></span>
           <h1 class="brand-title">STRIDE</h1>
           <p class="brand-track">${this.courses[this.selectedCourseIdx]?.code ?? ''} ${this.courses[this.selectedCourseIdx]?.name ?? ''}</p>
+          <p class="brand-local">times stay on this device</p>
         </div>
         <nav class="menu-nav">
           <button class="menu-btn is-primary" data-act="play">PLAY</button>
