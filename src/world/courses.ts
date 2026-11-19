@@ -584,6 +584,241 @@ const COURSE_04: CourseDef = {
   ],
 };
 
+// ============================================================================
+// COURSE 05 — SPIRE
+// Vertical climb. Stacked terraces, mantle stairs, wall-kick up a shaft, finish on the needle.
+// ============================================================================
+const COURSE_05: CourseDef = {
+  id: 'spire',
+  code: '05',
+  name: 'SPIRE',
+  spawn: [0, 0, -2],
+  spawnYaw: 0,
+  killY: -36,
+  sunAzimuth: 1.35,
+  sunElevation: 0.42,
+  ranks: { S: 18.0, A: 22.5, B: 29.0, C: 38.0 },
+  boxes: [
+    roof(0, 0, -10, 14, 28, { guideDir: '-z', label: 'P-01' }),
+    vault(0, 0, -16, 6.5, 1.1, 1.0),
+    // Terrace steps going UP
+    roof(0, 3.2, -38, 13, 16, { guideDir: '-z', label: 'P-02' }),
+    block(-5.8, 3.2, -38, 2.2, 2.4, 10, 'dark'),
+    roof(0, 7.0, -58, 12, 16, { guideDir: '-z', label: 'P-03' }),
+    vault(0, 7.0, -56, 6.0, 1.1, 1.0),
+    // Left wall-run climb
+    wallPanel('p_wr1', -4.0, 4.5, -74, 1.6, 10.0, 16.0, '+x'),
+    roof(-13.0, 16.0, -74, 16, 18, { noCollide: true, cleanRoof: true }),
+    roof(0, 12.5, -92, 13, 18, { guideDir: '-z', label: 'P-04' }),
+    slideGate(0, 12.5, -90, 10, 2.0, 1.18, 1.8),
+    // Mid rest + crane swing to needle
+    deck(0, 11.2, -112, 8, 8, { guideDir: '-z' }),
+    roof(0, 18.0, -138, 16, 24, { guideDir: '-z', label: 'FIN' }),
+    vault(0, 18.0, -130, 7.0, 1.1, 1.0),
+    block(-6.5, 18.0, -146, 3.0, 6.0, 8, 'dark'),
+    block(6.5, 18.0, -146, 3.0, 6.0, 8, 'dark'),
+  ],
+  ramps: [
+    { x: 0, y: 0, z: -26, w: 10, h: 3.2, d: 10, dir: '-z', style: 'rampConcrete' },
+    { x: 0, y: 3.2, z: -48, w: 9, h: 3.8, d: 8, dir: '-z', style: 'rampRed' },
+  ],
+  launchPads: [{ x: 0, y: 12.5, z: -99, w: 3.6, d: 3.6, vx: 0, vy: 14.5, vz: -12 }],
+  grapples: [
+    { id: 'pg1', x: 0, y: 16.5, z: -74, radius: 26, mountSide: '+x' },
+    { id: 'pg2', x: 0, y: 22.0, z: -124, radius: 28, mountSide: 'arch' },
+  ],
+  checkpoints: [
+    { index: 0, x: 0, y: 3.2, z: -36, w: 12, d: 3.2, spawnYaw: 0, axis: 'z' },
+    { index: 1, x: 0, y: 12.5, z: -86, w: 12, d: 3.2, spawnYaw: 0, axis: 'z' },
+  ],
+  finish: { x: 0, y: 18.0, z: -144, w: 13, d: 3.8, axis: 'z' },
+  prompts: [{ x: 0, y: 10, z: -70, key: 'SPACE', action: 'CLIMB', radius: 14 }],
+  flyover: [
+    {
+      from: [-14, 8, -8],
+      to: [-12, 22, -120],
+      lookFrom: [0, 4, -30],
+      lookTo: [0, 16, -140],
+      duration: 9.0,
+    },
+  ],
+};
+
+// ============================================================================
+// COURSE 06 — SWITCH
+// Tight S-curve. 90° rights and lefts, catwalk cuts, no big gaps — pure steering.
+// ============================================================================
+const COURSE_06: CourseDef = {
+  id: 'switch',
+  code: '06',
+  name: 'SWITCH',
+  spawn: [0, 0, -2],
+  spawnYaw: 0,
+  killY: -32,
+  sunAzimuth: -1.2,
+  sunElevation: 0.72,
+  ranks: { S: 17.5, A: 21.5, B: 27.5, C: 36.0 },
+  boxes: [
+    roof(0, 0, -12, 14, 28, { guideDir: '-z', label: 'W-01' }),
+    vault(0, 0, -18, 6.5, 1.1, 1.0),
+    // Right turn plaza
+    roof(14, 0, -42, 22, 18, { guideDir: '+x', label: 'W-02' }),
+    block(4, 0, -50, 16, 3.6, 1.6, 'dark', { guideDir: '+x' }),
+    slideGate(16, 0, -42, 2.0, 10, 1.18, 1.8),
+    catwalk(16, 1.4, -49, 14, 1.8, '+x'),
+    // Heading +X then left
+    roof(42, 0, -42, 20, 16, { guideDir: '+x' }),
+    vault(48, 0, -42, 1.1, 7, 1.0),
+    roof(58, 0, -22, 18, 28, { guideDir: '+z', label: 'W-03' }),
+    block(66, 0, -34, 1.6, 3.8, 16, 'dark', { guideDir: '+z' }),
+    wallPanel('w_wr1', 65.4, -2.5, -18, 1.6, 8.5, 16, '-x'),
+    roof(74, 8, -18, 14, 18, { noCollide: true, cleanRoof: true }),
+    // Left onto finish spine
+    roof(42, 1.5, 2, 28, 16, { guideDir: '-x', label: 'FIN' }),
+    slideGate(40, 1.5, 2, 2.0, 11, 1.18, 1.85),
+    vault(30, 1.5, 2, 1.1, 7.5, 1.0),
+    block(22, 1.5, 8.5, 8, 4.2, 2.6, 'dark'),
+    block(22, 1.5, -4.5, 8, 4.2, 2.6, 'dark'),
+  ],
+  ramps: [
+    { x: 58, y: 0, z: -8, w: 10, h: 1.5, d: 12, dir: '+z', style: 'rampConcrete' },
+  ],
+  launchPads: [],
+  grapples: [{ id: 'wg1', x: 58, y: 8.5, z: -8, radius: 22, mountSide: '+z' }],
+  checkpoints: [
+    { index: 0, x: 18, y: 0, z: -42, w: 3.4, d: 14, spawnYaw: -Math.PI / 2, axis: 'x' },
+    { index: 1, x: 58, y: 0, z: -28, w: 14, d: 3.4, spawnYaw: Math.PI, axis: 'z' },
+  ],
+  finish: { x: 26, y: 1.5, z: 2, w: 3.8, d: 13, axis: 'x' },
+  prompts: [{ x: 10, y: 2.4, z: -42, key: 'A / D', action: 'TURN', radius: 12 }],
+  flyover: [
+    {
+      from: [-10, 10, -8],
+      to: [50, 12, 8],
+      lookFrom: [8, 2, -30],
+      lookTo: [40, 3, 2],
+      duration: 9.0,
+    },
+  ],
+};
+
+// ============================================================================
+// COURSE 07 — LOWLINE
+// Street-level canyon. Narrow decks, long pendulum webs, sun low and cold.
+// ============================================================================
+const COURSE_07: CourseDef = {
+  id: 'lowline',
+  code: '07',
+  name: 'LOWLINE',
+  spawn: [0, -6, -2],
+  spawnYaw: 0,
+  killY: -48,
+  sunAzimuth: 2.4,
+  sunElevation: 0.28,
+  ranks: { S: 19.5, A: 24.0, B: 31.0, C: 42.0 },
+  boxes: [
+    roof(0, -6, -10, 12, 24, { guideDir: '-z', label: 'L-01', noShaft: true }),
+    vault(0, -6, -16, 6, 1.1, 1.0),
+    // Drop to alley floor
+    roof(0, -12, -36, 10, 18, { guideDir: '-z', label: 'L-02', noShaft: true }),
+    slideGate(0, -12, -34, 8, 1.8, 1.1, 1.6),
+    // High lips for pendulum (off-axis so you look up)
+    roof(-18, 4, -58, 14, 14, { cleanRoof: true, noShaft: true, label: 'LIP' }),
+    roof(18, 6, -78, 14, 14, { cleanRoof: true, noShaft: true }),
+    deck(0, -10, -68, 7, 10, { guideDir: '-z' }),
+    roof(-16, 5, -98, 12, 12, { cleanRoof: true, noShaft: true }),
+    roof(16, 3, -118, 14, 14, { cleanRoof: true, noShaft: true }),
+    deck(0, -8, -108, 8, 12, { guideDir: '-z' }),
+    wallPanel('l_wr1', 4.0, -14, -132, 1.5, 9.0, 16, '-x'),
+    roof(13, -2, -132, 14, 18, { noCollide: true, cleanRoof: true }),
+    roof(0, -9, -154, 14, 22, { guideDir: '-z', label: 'FIN', noShaft: true }),
+    vault(0, -9, -146, 6.5, 1.1, 1.0),
+    block(-5.8, -9, -162, 2.6, 4.5, 6, 'dark'),
+    block(5.8, -9, -162, 2.6, 4.5, 6, 'dark'),
+  ],
+  ramps: [
+    { x: 0, y: -12, z: -24, w: 8, h: 6, d: 10, dir: '+z', style: 'rampConcrete' },
+  ],
+  launchPads: [],
+  grapples: [
+    { id: 'lg1', x: -8, y: 8, z: -58, radius: 30, mountSide: '-x' },
+    { id: 'lg2', x: 8, y: 10, z: -88, radius: 30, mountSide: '+x' },
+    { id: 'lg3', x: 0, y: 9, z: -128, radius: 28, mountSide: 'arch' },
+  ],
+  checkpoints: [
+    { index: 0, x: 0, y: -12, z: -32, w: 9, d: 3.2, spawnYaw: 0, axis: 'z' },
+    { index: 1, x: 0, y: -8, z: -104, w: 7, d: 3.2, spawnYaw: 0, axis: 'z' },
+  ],
+  finish: { x: 0, y: -9, z: -160, w: 12, d: 3.6, axis: 'z' },
+  prompts: [{ x: 0, y: -2, z: -50, key: 'RMB', action: 'WEB UP', radius: 18 }],
+  flyover: [
+    {
+      from: [-16, 6, -8],
+      to: [-14, 4, -140],
+      lookFrom: [0, -4, -40],
+      lookTo: [0, -6, -160],
+      duration: 9.5,
+    },
+  ],
+};
+
+// ============================================================================
+// COURSE 08 — DROP
+// High start, long downhill, speed gates, red kicker into a last swing.
+// ============================================================================
+const COURSE_08: CourseDef = {
+  id: 'drop',
+  code: '08',
+  name: 'DROP',
+  spawn: [0, 22, -2],
+  spawnYaw: 0,
+  killY: -40,
+  sunAzimuth: 0.15,
+  sunElevation: 0.85,
+  ranks: { S: 16.5, A: 20.5, B: 26.5, C: 36.0 },
+  boxes: [
+    roof(0, 22, -4, 12, 16, { guideDir: '-z', label: 'D-01' }),
+    roof(0, 14, -28, 14, 22, { guideDir: '-z', cleanRoof: true }),
+    vault(0, 14, -34, 7, 1.1, 1.0),
+    roof(0, 8, -58, 14, 24, { guideDir: '-z', label: 'D-02' }),
+    slideGate(0, 8, -54, 11, 2.0, 1.18, 1.9),
+    catwalk(6.2, 9.4, -58, 2.0, 16, '-z'),
+    roof(0, 3, -88, 14, 26, { guideDir: '-z', label: 'D-03' }),
+    vault(0, 3, -82, 7, 1.1, 1.0),
+    slideGate(0, 3, -96, 11, 2.0, 1.18, 2.0),
+    wallPanel('d_wr1', -4.1, -1, -112, 1.6, 8.8, 16, '+x'),
+    roof(-13, 10, -112, 16, 18, { noCollide: true, cleanRoof: true }),
+    roof(0, 1.5, -136, 15, 22, { guideDir: '-z', label: 'D-04' }),
+    roof(0, 4.5, -168, 18, 28, { guideDir: '-z', label: 'FIN' }),
+    vault(0, 4.5, -158, 8, 1.1, 1.0),
+    block(-7, 4.5, -178, 3.2, 5.5, 8, 'dark'),
+    block(7, 4.5, -178, 3.2, 5.5, 8, 'dark'),
+  ],
+  ramps: [
+    { x: 0, y: 14, z: -14, w: 10, h: 8, d: 16, dir: '+z', style: 'rampConcrete' },
+    { x: 0, y: 8, z: -42, w: 11, h: 6, d: 14, dir: '+z', style: 'rampConcrete' },
+    { x: 0, y: 3, z: -72, w: 11, h: 5, d: 12, dir: '+z', style: 'rampConcrete' },
+    { x: 0, y: 1.5, z: -146, w: 8, h: 3.0, d: 10, dir: '-z', style: 'rampRed' },
+  ],
+  launchPads: [{ x: 0, y: 1.5, z: -144, w: 4, d: 4, vx: 0, vy: 13, vz: -16 }],
+  grapples: [{ id: 'dg1', x: 0, y: 12, z: -156, radius: 28, mountSide: 'arch' }],
+  checkpoints: [
+    { index: 0, x: 0, y: 8, z: -50, w: 13, d: 3.4, spawnYaw: 0, axis: 'z' },
+    { index: 1, x: 0, y: 1.5, z: -128, w: 13, d: 3.4, spawnYaw: 0, axis: 'z' },
+  ],
+  finish: { x: 0, y: 4.5, z: -176, w: 14, d: 4.0, axis: 'z' },
+  prompts: [{ x: 0, y: 18, z: -10, key: 'SHIFT', action: 'SLIDE', radius: 12 }],
+  flyover: [
+    {
+      from: [-16, 28, 4],
+      to: [-14, 10, -150],
+      lookFrom: [0, 18, -20],
+      lookTo: [0, 6, -170],
+      duration: 9.5,
+    },
+  ],
+};
+
 /** Scatter extra walkable rooftops around a course so you can web and land off-track. */
 function sprinklePlayground(course: CourseDef): CourseDef {
   let minX = Infinity;
@@ -656,4 +891,8 @@ export const COURSES: CourseDef[] = [
   sprinklePlayground(COURSE_02),
   sprinklePlayground(COURSE_03),
   sprinklePlayground(COURSE_04),
+  sprinklePlayground(COURSE_05),
+  sprinklePlayground(COURSE_06),
+  sprinklePlayground(COURSE_07),
+  sprinklePlayground(COURSE_08),
 ];
