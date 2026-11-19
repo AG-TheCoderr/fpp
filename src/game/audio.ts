@@ -1,8 +1,6 @@
 /**
- * Procedural Web Audio synthesizer for STRIDE:
- * Left/right alternating concrete footsteps, rubber pivot scuffs, wall-run taps, palm vaults,
- * landing thuds, carve/brake-modulated slide friction, velocity wind roar, grapple latch/zip,
- * updraft launch turbine, and checkpoint/finish chimes.
+ * Quiet procedural SFX. Wind is a low rumble, hits are short sine/triangle —
+ * no screaming bandpass noise on every step.
  */
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -11,7 +9,6 @@ export class AudioEngine {
 
   private windGain: GainNode | null = null;
   private windFilter: BiquadFilterNode | null = null;
-
   private slideGain: GainNode | null = null;
   private slideFilter: BiquadFilterNode | null = null;
 
@@ -20,7 +17,7 @@ export class AudioEngine {
   setVolume(v: number): void {
     this.volume = Math.max(0, Math.min(1, v));
     if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.03);
+      this.masterGain.gain.setTargetAtTime(this.volume * 0.7, this.ctx.currentTime, 0.03);
     }
   }
 
@@ -45,46 +42,47 @@ export class AudioEngine {
   private setupGraph(): void {
     const ctx = this.ctx!;
     this.masterGain = ctx.createGain();
-    this.masterGain.gain.value = this.volume;
-    this.masterGain.connect(ctx.destination);
+    this.masterGain.gain.value = this.volume * 0.7;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -22;
+    comp.knee.value = 12;
+    comp.ratio.value = 5;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.12;
+    this.masterGain.connect(comp);
+    comp.connect(ctx.destination);
 
     const len = ctx.sampleRate * 2;
     this.noiseBuffer = ctx.createBuffer(1, len, ctx.sampleRate);
     const data = this.noiseBuffer.getChannelData(0);
-    let b0 = 0,
-      b1 = 0,
-      b2 = 0;
+    let b0 = 0;
     for (let i = 0; i < len; i++) {
       const white = Math.random() * 2 - 1;
-      b0 = 0.997 * b0 + white * 0.029;
-      b1 = 0.985 * b1 + white * 0.032;
-      b2 = 0.95 * b2 + white * 0.048;
-      data[i] = Math.max(-1, Math.min(1, (b0 + b1 + b2 + white * 0.18) * 1.7));
+      b0 = 0.998 * b0 + white * 0.02;
+      data[i] = b0 * 0.55;
     }
 
-    // Continuous velocity-coupled rooftop wind
     const windSrc = ctx.createBufferSource();
     windSrc.buffer = this.noiseBuffer;
     windSrc.loop = true;
     this.windFilter = ctx.createBiquadFilter();
-    this.windFilter.type = 'bandpass';
-    this.windFilter.frequency.value = 260;
-    this.windFilter.Q.value = 0.7;
+    this.windFilter.type = 'lowpass';
+    this.windFilter.frequency.value = 280;
+    this.windFilter.Q.value = 0.4;
     this.windGain = ctx.createGain();
-    this.windGain.gain.value = 0.015;
+    this.windGain.gain.value = 0.008;
     windSrc.connect(this.windFilter);
     this.windFilter.connect(this.windGain);
     this.windGain.connect(this.masterGain);
     windSrc.start();
 
-    // Continuous speed/carve/brake-modulated concrete slide scrape
     const slideSrc = ctx.createBufferSource();
     slideSrc.buffer = this.noiseBuffer;
     slideSrc.loop = true;
     this.slideFilter = ctx.createBiquadFilter();
-    this.slideFilter.type = 'bandpass';
-    this.slideFilter.frequency.value = 1450;
-    this.slideFilter.Q.value = 1.15;
+    this.slideFilter.type = 'lowpass';
+    this.slideFilter.frequency.value = 520;
+    this.slideFilter.Q.value = 0.5;
     this.slideGain = ctx.createGain();
     this.slideGain.gain.value = 0;
     slideSrc.connect(this.slideFilter);
@@ -106,169 +104,128 @@ export class AudioEngine {
     const now = this.ctx.currentTime;
 
     if (!active) {
-      this.windGain.gain.setTargetAtTime(0.012, now, 0.12);
-      this.windFilter.frequency.setTargetAtTime(220, now, 0.12);
-      this.slideGain.gain.setTargetAtTime(0, now, 0.05);
+      this.windGain.gain.setTargetAtTime(0.004, now, 0.18);
+      this.windFilter.frequency.setTargetAtTime(220, now, 0.18);
+      this.slideGain.gain.setTargetAtTime(0, now, 0.06);
       return;
     }
 
-    // Rooftop wind opens quadratically with velocity
-    const sNorm = Math.max(0, Math.min(1, (totalSpeed - 6.5) / 19));
-    const targetWindVol = 0.015 + sNorm * sNorm * 0.23;
-    const targetWindFreq = 235 + sNorm * 1200;
-    this.windGain.gain.setTargetAtTime(targetWindVol, now, 0.07);
-    this.windFilter.frequency.setTargetAtTime(targetWindFreq, now, 0.07);
+    const sNorm = Math.max(0, Math.min(1, (totalSpeed - 8) / 18));
+    this.windGain.gain.setTargetAtTime(0.006 + sNorm * sNorm * 0.045, now, 0.1);
+    this.windFilter.frequency.setTargetAtTime(240 + sNorm * 380, now, 0.1);
 
-    // Tactile slide texture responds dynamically to speed, A/D edge carving, and S heel-braking!
-    if (sliding && totalSpeed > 1.0) {
-      const slideNorm = Math.max(0.15, Math.min(1.15, totalSpeed / 19));
-      const edgeBite = 1 + Math.abs(slideCarve) * 0.28 + (slideBraking ? 0.52 : 0);
-      const vol = Math.min(0.26, 0.15 * slideNorm * edgeBite);
-      const freq =
-        900 +
-        slideNorm * 1050 +
-        Math.abs(slideCarve) * 320 +
-        (slideBraking ? 520 : 0);
-      this.slideGain.gain.setTargetAtTime(vol, now, 0.028);
-      this.slideFilter.frequency.setTargetAtTime(freq, now, 0.04);
+    if (sliding && totalSpeed > 1.5) {
+      const slideNorm = Math.max(0.2, Math.min(1, totalSpeed / 20));
+      const bite = 1 + Math.abs(slideCarve) * 0.12 + (slideBraking ? 0.2 : 0);
+      this.slideGain.gain.setTargetAtTime(Math.min(0.07, 0.035 * slideNorm * bite), now, 0.04);
+      this.slideFilter.frequency.setTargetAtTime(380 + slideNorm * 280, now, 0.05);
     } else {
-      this.slideGain.gain.setTargetAtTime(0, now, 0.045);
+      this.slideGain.gain.setTargetAtTime(0, now, 0.05);
     }
   }
 
   playFootstep(speed: number, isWall: boolean, foot: -1 | 1 = 1): void {
-    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-    // Subtle left/right acoustic asymmetry makes stride feel genuinely human
-    const footTint = foot < 0 ? 0.96 : 1.04;
-    const jitter = (0.93 + Math.random() * 0.14) * footTint;
-    const vol = Math.min(0.22, (0.075 + (speed / 22) * 0.115) * (isWall ? 0.85 : 1.0));
-
-    const osc = ctx.createOscillator();
-    const og = ctx.createGain();
-    osc.type = 'triangle';
-    const baseF = (isWall ? 136 : 96) * jitter;
-    osc.frequency.setValueAtTime(baseF, now);
-    osc.frequency.exponentialRampToValueAtTime(40, now + 0.055);
-    og.gain.setValueAtTime(vol, now);
-    og.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
-    osc.connect(og);
-    og.connect(this.masterGain);
-    osc.start(now);
-    osc.stop(now + 0.065);
-
-    this.playNoiseBurst(
-      isWall ? 1680 * jitter : 1260 * jitter,
-      1.6,
-      vol * 0.72,
-      0.045
-    );
+    const vol = Math.min(0.11, (0.04 + (speed / 24) * 0.06) * (isWall ? 0.8 : 1));
+    const f = (isWall ? 148 : 92) * (foot < 0 ? 0.97 : 1.03);
+    this.playThump(f, vol, 0.05);
   }
 
   playPivot(intensity: number): void {
-    // Crisp rubber-sole concrete cut scuff on fast direction reversals!
-    const v = 0.07 + intensity * 0.09;
-    this.playNoiseBurst(1850, 2.2, v, 0.085);
-    this.playToneSweep(120, 48, 0.065, v * 0.85, 'triangle');
+    this.playThump(70, 0.04 + intensity * 0.04, 0.06);
   }
 
   playJump(boosted: boolean): void {
-    if (!this.ctx || !this.masterGain) return;
-    this.playNoiseBurst(boosted ? 920 : 620, 0.9, boosted ? 0.18 : 0.12, 0.14);
-    if (boosted) {
-      this.playToneSweep(165, 330, 0.11, 0.08, 'sine');
-    }
+    this.playToneSweep(140, 210, 0.07, boosted ? 0.07 : 0.045, 'sine');
   }
 
   playLand(impact: number, intoSlide: boolean): void {
-    if (!this.ctx || !this.masterGain) return;
-    const strength = Math.max(0.15, Math.min(1, impact / 22));
-    const vol = (intoSlide ? 0.15 : 0.28) * strength;
-    this.playToneSweep(105, 34, 0.11, vol, 'triangle');
-    this.playNoiseBurst(780, 1.1, vol * 0.85, 0.09);
+    const strength = Math.max(0.12, Math.min(0.7, impact / 24));
+    this.playThump(72, (intoSlide ? 0.06 : 0.12) * strength, 0.08);
   }
 
   playSlideStart(slopeSlam = false): void {
-    this.playNoiseBurst(slopeSlam ? 1900 : 1600, 0.8, slopeSlam ? 0.24 : 0.18, 0.14);
-    this.playToneSweep(slopeSlam ? 175 : 140, 58, 0.12, slopeSlam ? 0.16 : 0.11, 'sine');
+    this.playThump(slopeSlam ? 90 : 110, slopeSlam ? 0.08 : 0.05, 0.07);
   }
 
   playVault(spring: boolean): void {
-    this.playToneSweep(175, 62, 0.075, 0.2, 'triangle');
-    this.playNoiseBurst(1100, 1.0, 0.17, 0.13);
-    if (spring) {
-      this.playToneSweep(260, 520, 0.14, 0.09, 'sine');
-    }
+    this.playToneSweep(180, 90, 0.06, 0.07, 'sine');
+    if (spring) this.playToneSweep(240, 360, 0.09, 0.04, 'sine');
   }
 
   playMantle(): void {
-    this.playToneSweep(145, 58, 0.09, 0.18, 'triangle');
-    this.playNoiseBurst(850, 1.2, 0.14, 0.16);
+    this.playThump(88, 0.07, 0.08);
   }
 
   playWallRunStart(): void {
-    this.playNoiseBurst(1350, 1.4, 0.15, 0.1);
-    this.playToneSweep(190, 250, 0.09, 0.07, 'sine');
+    this.playToneSweep(160, 200, 0.06, 0.04, 'sine');
   }
 
   playWallKick(): void {
-    this.playToneSweep(150, 55, 0.07, 0.18, 'triangle');
-    this.playToneSweep(220, 410, 0.12, 0.08, 'sine');
-    this.playNoiseBurst(1150, 0.9, 0.17, 0.13);
+    this.playThump(100, 0.08, 0.06);
+    this.playToneSweep(200, 320, 0.08, 0.04, 'sine');
   }
 
   playGrappleAttach(): void {
-    if (!this.ctx || !this.masterGain) return;
-    this.playToneSweep(920, 380, 0.045, 0.15, 'square');
-    this.playToneSweep(280, 860, 0.18, 0.11, 'sawtooth', 1800);
-    this.playNoiseBurst(2200, 1.8, 0.14, 0.12);
+    this.playToneSweep(520, 280, 0.07, 0.08, 'sine');
+    this.playToneSweep(260, 420, 0.12, 0.05, 'sine');
   }
 
   playGrappleRelease(slingshot: boolean): void {
-    if (slingshot) {
-      this.playToneSweep(340, 640, 0.13, 0.09, 'sine');
-      this.playNoiseBurst(1100, 0.8, 0.16, 0.15);
-    } else {
-      this.playToneSweep(420, 240, 0.05, 0.06, 'sine');
-    }
+    if (slingshot) this.playToneSweep(280, 420, 0.1, 0.05, 'sine');
+    else this.playToneSweep(360, 220, 0.05, 0.035, 'sine');
   }
 
   playLaunchPad(): void {
-    this.playToneSweep(95, 480, 0.34, 0.18, 'sine');
-    this.playToneSweep(190, 720, 0.32, 0.09, 'triangle');
-    this.playNoiseBurst(950, 0.6, 0.26, 0.36);
+    this.playToneSweep(90, 280, 0.22, 0.08, 'sine');
   }
 
   playCheckpoint(aheadOfPb: boolean): void {
-    if (!this.ctx || !this.masterGain) return;
+    if (!this.ctx) return;
     const now = this.ctx.currentTime;
-    const f1 = aheadOfPb ? 659.25 : 587.33;
-    const f2 = aheadOfPb ? 987.77 : 783.99;
-    this.playChimeNote(f1, now, 0.22, 0.12);
-    this.playChimeNote(f2, now + 0.065, 0.32, 0.13);
+    const f1 = aheadOfPb ? 659.25 : 523.25;
+    const f2 = aheadOfPb ? 830.61 : 659.25;
+    this.playChimeNote(f1, now, 0.18, 0.07);
+    this.playChimeNote(f2, now + 0.07, 0.24, 0.07);
   }
 
   playFinish(isNewBest: boolean): void {
-    if (!this.ctx || !this.masterGain) return;
+    if (!this.ctx) return;
     const now = this.ctx.currentTime;
     const chord = isNewBest
-      ? [523.25, 659.25, 783.99, 1046.5]
-      : [440.0, 554.37, 659.25, 880.0];
+      ? [523.25, 659.25, 783.99]
+      : [392.0, 493.88, 587.33];
     chord.forEach((f, i) => {
-      this.playChimeNote(f, now + i * 0.055, 0.65, 0.12);
+      this.playChimeNote(f, now + i * 0.07, 0.45, 0.07);
     });
-    this.playNoiseBurst(700, 0.6, 0.16, 0.35);
   }
 
   playReset(): void {
-    this.playNoiseBurst(1200, 1.4, 0.09, 0.08);
-    this.playToneSweep(380, 220, 0.07, 0.07, 'sine');
+    this.playToneSweep(240, 140, 0.06, 0.04, 'sine');
   }
 
   playUiClick(accent = false): void {
     this.unlock();
-    this.playToneSweep(accent ? 680 : 520, accent ? 880 : 420, 0.04, 0.06, 'sine');
+    this.playToneSweep(accent ? 620 : 440, accent ? 740 : 380, 0.035, 0.035, 'sine');
+  }
+
+  private playThump(freq: number, vol: number, dur: number): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 420;
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, now);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(28, freq * 0.35), now + dur);
+    g.gain.setValueAtTime(vol, now);
+    g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
+    osc.connect(lp);
+    lp.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + dur + 0.02);
   }
 
   private playChimeNote(freq: number, startTime: number, dur: number, vol: number): void {
@@ -278,7 +235,7 @@ export class AudioEngine {
     osc.type = 'sine';
     osc.frequency.setValueAtTime(freq, startTime);
     g.gain.setValueAtTime(0.0001, startTime);
-    g.gain.linearRampToValueAtTime(vol, startTime + 0.01);
+    g.gain.linearRampToValueAtTime(vol, startTime + 0.012);
     g.gain.exponentialRampToValueAtTime(0.0008, startTime + dur);
     osc.connect(g);
     g.connect(this.masterGain);
@@ -291,8 +248,7 @@ export class AudioEngine {
     f1: number,
     dur: number,
     vol: number,
-    type: OscillatorType,
-    lpFreq?: number
+    type: OscillatorType
   ): void {
     if (!this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
@@ -303,38 +259,9 @@ export class AudioEngine {
     osc.frequency.exponentialRampToValueAtTime(Math.max(20, f1), now + dur);
     g.gain.setValueAtTime(vol, now);
     g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
-
-    if (lpFreq) {
-      const lp = this.ctx.createBiquadFilter();
-      lp.type = 'lowpass';
-      lp.frequency.value = lpFreq;
-      osc.connect(lp);
-      lp.connect(g);
-    } else {
-      osc.connect(g);
-    }
+    osc.connect(g);
     g.connect(this.masterGain);
     osc.start(now);
     osc.stop(now + dur + 0.015);
-  }
-
-  private playNoiseBurst(freq: number, q: number, vol: number, dur: number): void {
-    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
-    const now = this.ctx.currentTime;
-    const src = this.ctx.createBufferSource();
-    src.buffer = this.noiseBuffer;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = freq;
-    filter.Q.value = q;
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(vol, now);
-    g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
-
-    src.connect(filter);
-    filter.connect(g);
-    g.connect(this.masterGain);
-    const randomOffset = Math.random() * 1.2;
-    src.start(now, randomOffset, dur + 0.02);
   }
 }
