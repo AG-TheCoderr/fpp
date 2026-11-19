@@ -1,14 +1,9 @@
-/* STRIDE offline cache — keep scope at ./ for GitHub Pages. */
-const CACHE = 'stride-pwa-v1';
-const PRECACHE = ['./', './index.html', './manifest.webmanifest'];
+/* Network-first so GitHub Pages deploys actually reach players. */
+const CACHE = 'stride-pwa-v3';
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches
-      .open(CACHE)
-      .then((cache) => cache.addAll(PRECACHE))
-      .then(() => self.skipWaiting())
-  );
+  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE));
 });
 
 self.addEventListener('activate', (event) => {
@@ -24,17 +19,14 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   event.respondWith(
-    caches.match(req).then((hit) => {
-      if (hit) return hit;
-      return fetch(req)
-        .then((res) => {
-          if (res.ok && (req.url.startsWith(self.location.origin) || req.url.includes('/assets/'))) {
-            const copy = res.clone();
-            caches.open(CACHE).then((cache) => cache.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => caches.match('./index.html'));
-    })
+    fetch(req)
+      .then((res) => {
+        if (res.ok && req.url.startsWith(self.location.origin)) {
+          const copy = res.clone();
+          caches.open(CACHE).then((cache) => cache.put(req, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html')))
   );
 });

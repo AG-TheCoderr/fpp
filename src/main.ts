@@ -177,18 +177,18 @@ class StrideGame {
       },
       onUiSound: (accent) => this.audio.playUiClick(accent),
     });
+    this.ui.showTitle(0);
 
     this.applyGraphics(this.settings.graphics);
-    this.ui.showTitle(0);
     registerServiceWorker();
-    // Paint the title menu first — course build is heavy and used to leave a blank blue screen.
-    requestAnimationFrame(() => {
+    // After first paint — rAF still runs *before* paint and used to freeze on a blue screen.
+    window.setTimeout(() => {
       try {
         this.loadCourse(0);
       } catch (err) {
         console.error('STRIDE failed to load course', err);
       }
-    });
+    }, 50);
 
     const enterFullscreen = () => requestAppFullscreen();
     window.addEventListener('pointerdown', enterFullscreen, { capture: true });
@@ -680,9 +680,9 @@ class StrideGame {
     this.motionBlur.render(
       this.scene,
       this.camera,
-      this.player.vx,
-      this.player.vy,
-      this.player.vz,
+      this.player?.vx ?? 0,
+      this.player?.vy ?? 0,
+      this.player?.vz ?? 0,
       this.cameraRig.angVelYaw,
       this.cameraRig.angVelPitch,
       this.cameraRig.angVelRoll,
@@ -698,4 +698,20 @@ class StrideGame {
   }
 }
 
-new StrideGame();
+try {
+  new StrideGame();
+} catch (err) {
+  console.error('STRIDE failed to start', err);
+  const root = document.getElementById('ui-root');
+  if (root && !root.querySelector('.menu-btn')) {
+    root.innerHTML = `
+      <div class="menu-screen">
+        <div class="brand">
+          <span class="brand-slash"></span>
+          <h1 class="brand-title">STRIDE</h1>
+        </div>
+        <p class="boot-msg">TAP TO RETRY</p>
+      </div>`;
+    root.addEventListener('pointerdown', () => window.location.reload(), { once: true });
+  }
+}
