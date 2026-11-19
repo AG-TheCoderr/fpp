@@ -19,10 +19,8 @@ const BLUR_FRAG = /* glsl */ `
   uniform float uSampleCount;
   uniform float uFxStrength;
   uniform float uPunch;
-  uniform vec2 uSunUV;
-  uniform float uSunOn;
+  uniform sampler2D tRays;
   uniform float uGodRays;
-  uniform float uGodSamples;
 
   varying vec2 vUv;
 
@@ -199,45 +197,10 @@ const BLUR_FRAG = /* glsl */ `
     float vig = smoothstep(0.15, 1.05, radial);
     color *= 1.0 - vig * (0.22 + uPunch * 0.18) * uFxStrength;
 
-    // Soft dispersed shafts: wider haze when looking into the sun so spokes don't cut the frame
-    if (uGodRays > 0.01 && uSunOn > 0.01) {
-      vec2 toSun = uSunUV - vUv;
-      float distSun = length(toSun);
-      float lookIn = 1.0 - smoothstep(0.06, 0.38, length(uSunUV - vec2(0.5)));
-      if (distSun < mix(0.82, 1.05, lookIn)) {
-        float jitterG = ign(gl_FragCoord.xy + vec2(uFrameJitter * 41.0, 11.0));
-        float jitterB = ign(gl_FragCoord.yx + vec2(17.0, uFrameJitter * 23.0));
-        int GN = int(uGodSamples + 0.5);
-        float decay = mix(0.78, 0.70, lookIn);
-        float weight = 1.0;
-        float sum = 0.0;
-        float wSumG = 0.001;
-        vec2 stepUv = toSun * (mix(1.15, 0.72, lookIn) / max(float(GN), 1.0));
-        vec2 perp = vec2(-stepUv.y, stepUv.x);
-        float spread = mix(0.9, 3.4, lookIn);
-        vec2 gUv = vUv + perp * (jitterG - 0.5) * spread + stepUv * (jitterB - 0.5) * lookIn;
-        for (int gi = 0; gi < 8; gi++) {
-          if (gi >= GN) break;
-          gUv += stepUv;
-          if (gUv.x < 0.0 || gUv.x > 1.0 || gUv.y < 0.0 || gUv.y > 1.0) break;
-          float gd = texture2D(tDepth, gUv).r;
-          float sky = smoothstep(mix(0.993, 0.985, lookIn), 0.9995, gd);
-          if (sky > 0.03) {
-            float energy = max(luma(texture2D(tColor, gUv).rgb) - mix(0.42, 0.28, lookIn), 0.0) * sky;
-            sum += energy * weight;
-          }
-          wSumG += weight;
-          weight *= decay;
-        }
-        float haze = pow(max(sum / wSumG, 0.0), mix(0.68, 0.48, lookIn));
-        float radialSoft = exp(-distSun * mix(0.52, 1.15, lookIn));
-        float edgeFeather = smoothstep(0.0, mix(0.04, 0.14, lookIn), distSun);
-        float shafts = haze * radialSoft * edgeFeather;
-        float fg = smoothstep(0.82, 0.998, centerDepth);
-        shafts *= mix(0.10, 1.0, fg);
-        float veil = lookIn * exp(-distSun * distSun * 9.0) * 0.22;
-        color += vec3(1.02, 0.94, 0.80) * (shafts * 0.62 + veil) * uGodRays * uSunOn;
-      }
+    if (uGodRays > 0.01) {
+      vec3 rays = texture2D(tRays, vUv).rgb;
+      float fg = smoothstep(0.82, 0.998, centerDepth);
+      color += rays * mix(0.12, 1.0, fg) * uGodRays;
     }
 
     // Fine IGN grain so the HDR grade doesn't look plastic
@@ -250,11 +213,78 @@ const BLUR_FRAG = /* glsl */ `
   }
 `;
 
+const RAY_FRAG = /* glsl */ `
+  uniform sampler2D tColor;
+  uniform sampler2D tDepth;
+  uniform vec2 uSunUV;
+  uniform float uSunOn;
+  uniform float uGodSamples;
+  uniform float uFrameJitter;
+
+  varying vec2 vUv;
+
+  float ign(vec2 pixel) {
+    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+    return fract(magic.z * fract(dot(pixel, magic.xy)));
+  }
+
+  void main() {
+    if (uSunOn < 0.05) {
+      gl_FragColor = vec4(0.0);
+      return;
+    }
+    vec2 toSun = uSunUV - vUv;
+    float distSun = length(toSun);
+    float lookIn = 1.0 - smoothstep(0.06, 0.38, length(uSunUV - vec2(0.5)));
+    if (distSun > mix(0.82, 1.05, lookIn)) {
+      gl_FragColor = vec4(0.0);
+      return;
+    }
+    float jitterG = ign(gl_FragCoord.xy + vec2(uFrameJitter * 41.0, 11.0));
+    float jitterB = ign(gl_FragCoord.yx + vec2(17.0, uFrameJitter * 23.0));
+    int GN = int(uGodSamples + 0.5);
+    float decay = mix(0.78, 0.70, lookIn);
+    float weight = 1.0;
+    float sum = 0.0;
+    float wSumG = 0.001;
+    vec2 stepUv = toSun * (mix(1.15, 0.72, lookIn) / max(float(GN), 1.0));
+    vec2 perp = vec2(-stepUv.y, stepUv.x);
+    float spread = mix(0.9, 3.4, lookIn);
+    vec2 gUv = vUv + perp * (jitterG - 0.5) * spread + stepUv * (jitterB - 0.5) * lookIn;
+    float lastSky = 0.0;
+    for (int gi = 0; gi < 8; gi++) {
+      if (gi >= GN) break;
+      gUv += stepUv;
+      if (gUv.x < 0.0 || gUv.x > 1.0 || gUv.y < 0.0 || gUv.y > 1.0) break;
+      float gd = texture2D(tDepth, gUv).r;
+      float sky = smoothstep(mix(0.993, 0.985, lookIn), 0.9995, gd);
+      lastSky = sky;
+      sum += sky * weight;
+      wSumG += weight;
+      weight *= decay;
+    }
+    float haze = pow(max(sum / wSumG, 0.0), mix(0.68, 0.48, lookIn));
+    float radialSoft = exp(-distSun * mix(0.52, 1.15, lookIn));
+    float edgeFeather = smoothstep(0.0, mix(0.04, 0.14, lookIn), distSun);
+    float shafts = haze * radialSoft * edgeFeather;
+    float veil = lookIn * exp(-distSun * distSun * 9.0) * 0.22;
+    float tint = 0.55;
+    if (lastSky > 0.2) {
+      tint = max(texture2D(tColor, uSunUV).r, 0.45);
+    }
+    vec3 rgb = vec3(1.02, 0.94, 0.80) * (shafts * 0.62 + veil) * uSunOn * tint;
+    gl_FragColor = vec4(rgb, 1.0);
+  }
+`;
+
 export class VelocityMotionBlur {
   private target: THREE.WebGLRenderTarget;
+  private rayTarget: THREE.WebGLRenderTarget;
   private quadScene = new THREE.Scene();
+  private rayScene = new THREE.Scene();
   private quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private material: THREE.ShaderMaterial;
+  private rayMaterial: THREE.ShaderMaterial;
 
   // Scratch matrices & vectors (zero per-frame heap allocations!)
   private currViewProj = new THREE.Matrix4();
@@ -275,8 +305,10 @@ export class VelocityMotionBlur {
   private fxStrength = 1;
   private punch = 0;
   private godRays = 1;
-  private godSamples = 12;
+  private godSamples = 6;
+  private rayScale = 0.5;
   private sunNdc = new THREE.Vector3();
+  private sunOn = 0;
 
   constructor(private renderer: THREE.WebGLRenderer) {
     const size = this.getBufferSize();
@@ -296,10 +328,8 @@ export class VelocityMotionBlur {
         uSampleCount: { value: 12 },
         uFxStrength: { value: 1.0 },
         uPunch: { value: 0.0 },
-        uSunUV: { value: new THREE.Vector2(0.5, 0.7) },
-        uSunOn: { value: 0.0 },
+        tRays: { value: null as THREE.Texture | null },
         uGodRays: { value: 1.0 },
-        uGodSamples: { value: 12 },
       },
       depthTest: false,
       depthWrite: false,
@@ -319,6 +349,39 @@ export class VelocityMotionBlur {
     const quad = new THREE.Mesh(triGeo, this.material);
     quad.frustumCulled = false;
     this.quadScene.add(quad);
+
+    this.rayTarget = new THREE.WebGLRenderTarget(
+      Math.max(1, Math.floor(size.x * this.rayScale)),
+      Math.max(1, Math.floor(size.y * this.rayScale)),
+      {
+        type: THREE.HalfFloatType,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        depthBuffer: false,
+        stencilBuffer: false,
+      }
+    );
+    this.rayTarget.texture.colorSpace = THREE.LinearSRGBColorSpace;
+    this.material.uniforms.tRays.value = this.rayTarget.texture;
+
+    this.rayMaterial = new THREE.ShaderMaterial({
+      vertexShader: BLUR_VERT,
+      fragmentShader: RAY_FRAG,
+      uniforms: {
+        tColor: { value: this.target.texture },
+        tDepth: { value: this.target.depthTexture },
+        uSunUV: { value: new THREE.Vector2(0.5, 0.7) },
+        uSunOn: { value: 0.0 },
+        uGodSamples: { value: 6 },
+        uFrameJitter: { value: 0.0 },
+      },
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const rayQuad = new THREE.Mesh(triGeo, this.rayMaterial);
+    rayQuad.frustumCulled = false;
+    this.rayScene.add(rayQuad);
   }
 
   setQuality(graphics: 'low' | 'medium' | 'high'): void {
@@ -327,22 +390,25 @@ export class VelocityMotionBlur {
       this.sampleCount = 6;
       this.dprCap = 1;
       this.fxStrength = 0.42;
-      this.godRays = 0.28;
-      this.godSamples = 4;
+      this.godRays = 0;
+      this.godSamples = 0;
+      this.rayScale = 0.25;
     } else if (graphics === 'medium') {
       this.renderScale = 0.88;
       this.sampleCount = 8;
       this.dprCap = 1.5;
       this.fxStrength = 0.78;
-      this.godRays = 0.55;
-      this.godSamples = 6;
+      this.godRays = 0.7;
+      this.godSamples = 4;
+      this.rayScale = 0.5;
     } else {
       this.renderScale = 1;
       this.sampleCount = 12;
       this.dprCap = 2;
       this.fxStrength = 1;
-      this.godRays = 0.82;
-      this.godSamples = 8;
+      this.godRays = 0.85;
+      this.godSamples = 6;
+      this.rayScale = 0.5;
     }
     this.resize();
   }
@@ -386,6 +452,12 @@ export class VelocityMotionBlur {
     this.target.depthTexture = depthTex;
     this.material.uniforms.tDepth.value = depthTex;
     this.material.uniforms.uTexelSize.value.set(1 / size.x, 1 / size.y);
+    this.rayTarget.setSize(
+      Math.max(1, Math.floor(size.x * this.rayScale)),
+      Math.max(1, Math.floor(size.y * this.rayScale))
+    );
+    this.rayMaterial.uniforms.tDepth.value = depthTex;
+    this.rayMaterial.uniforms.tColor.value = this.target.texture;
   }
 
   resetVelocity(): void {
@@ -397,7 +469,7 @@ export class VelocityMotionBlur {
     this.sunNdc.copy(sunDir).multiplyScalar(900).add(camera.position).project(camera);
     const uvx = this.sunNdc.x * 0.5 + 0.5;
     const uvy = this.sunNdc.y * 0.5 + 0.5;
-    this.material.uniforms.uSunUV.value.set(uvx, uvy);
+    this.rayMaterial.uniforms.uSunUV.value.set(uvx, uvy);
     let on = 0;
     if (this.sunNdc.z < 1) {
       const ox = Math.max(0, Math.abs(uvx - 0.5) - 0.62);
@@ -405,7 +477,8 @@ export class VelocityMotionBlur {
       on = Math.max(0, 1 - (ox + oy) * 2.1);
       on *= THREE.MathUtils.smoothstep(sunDir.y, -0.04, 0.18);
     }
-    this.material.uniforms.uSunOn.value = on;
+    this.sunOn = on;
+    this.rayMaterial.uniforms.uSunOn.value = on;
   }
 
   render(
@@ -478,13 +551,22 @@ export class VelocityMotionBlur {
     const punchTarget = smoothstep(10.0, 22.0, speed);
     this.punch += (punchTarget - this.punch) * Math.min(1, 7 * dt);
     this.material.uniforms.uPunch.value = this.punch;
-    this.material.uniforms.uGodRays.value = this.godRays * this.fxStrength;
-    this.material.uniforms.uGodSamples.value = this.godSamples;
+    const doRays = this.godRays > 0.01 && this.sunOn > 0.05;
+    this.material.uniforms.uGodRays.value = doRays ? this.godRays * this.fxStrength : 0;
 
     // Pass 1: Render 3D world to HDR + Depth target
     this.renderer.setRenderTarget(this.target);
     this.renderer.clear();
     this.renderer.render(scene, camera);
+
+    // Pass 1b: half-res shafts (skipped on low / sun off-screen)
+    if (doRays) {
+      this.rayMaterial.uniforms.uFrameJitter.value = this.frameCounter / 64;
+      this.rayMaterial.uniforms.uGodSamples.value = this.godSamples;
+      this.renderer.setRenderTarget(this.rayTarget);
+      this.renderer.clear();
+      this.renderer.render(this.rayScene, this.quadCam);
+    }
 
     // Pass 2: Fullscreen per-pixel velocity motion blur + ACES tone map to screen
     this.renderer.setRenderTarget(null);
