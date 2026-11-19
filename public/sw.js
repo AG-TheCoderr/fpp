@@ -1,5 +1,5 @@
-/* Network-first. Same-origin GET only — don't touch other hosts or cache junk. */
-const CACHE = 'stride-pwa-v4';
+/* Network-first. Do not stash HTML/JS (that was serving old game). Images only. */
+const CACHE = 'stride-pwa-v5';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -10,10 +10,23 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
+
+function isAppCode(url) {
+  const p = url.pathname.toLowerCase();
+  return (
+    p.endsWith('.html') ||
+    p.endsWith('.js') ||
+    p.endsWith('.css') ||
+    p.endsWith('.json') ||
+    p.endsWith('.webmanifest') ||
+    p === '/' ||
+    p.endsWith('/')
+  );
+}
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
@@ -27,6 +40,11 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
+  if (isAppCode(url)) {
+    event.respondWith(fetch(req));
+    return;
+  }
+
   event.respondWith(
     fetch(req)
       .then((res) => {
@@ -36,6 +54,6 @@ self.addEventListener('fetch', (event) => {
         }
         return res;
       })
-      .catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html')))
+      .catch(() => caches.match(req))
   );
 });
