@@ -19,6 +19,10 @@ const BLUR_FRAG = /* glsl */ `
   uniform float uSampleCount;
   uniform float uFxStrength;
   uniform float uPunch;
+  uniform vec2 uSunUV;
+  uniform float uSunOn;
+  uniform float uGodRays;
+  uniform float uGodSamples;
 
   varying vec2 vUv;
 
@@ -195,6 +199,35 @@ const BLUR_FRAG = /* glsl */ `
     float vig = smoothstep(0.15, 1.05, radial);
     color *= 1.0 - vig * (0.22 + uPunch * 0.18) * uFxStrength;
 
+    // Crepuscular shafts: Sousa radial blur of sky luminance toward the projected sun
+    if (uGodRays > 0.01 && uSunOn > 0.01) {
+      vec2 toSun = uSunUV - vUv;
+      float distSun = length(toSun);
+      float jitterG = ign(gl_FragCoord.xy + vec2(uFrameJitter * 41.0, 11.0));
+      int GN = int(uGodSamples + 0.5);
+      float decay = 0.91;
+      float weight = 1.0;
+      float sum = 0.0;
+      float wSumG = 0.001;
+      vec2 stepUv = toSun * (0.92 / max(float(GN), 1.0));
+      vec2 gUv = vUv - stepUv * jitterG * 0.35;
+      for (int gi = 0; gi < 12; gi++) {
+        if (gi >= GN) break;
+        gUv += stepUv;
+        if (gUv.x < 0.0 || gUv.x > 1.0 || gUv.y < 0.0 || gUv.y > 1.0) break;
+        float gd = texture2D(tDepth, gUv).r;
+        float sky = smoothstep(0.9965, 0.9996, gd);
+        float energy = max(luma(texture2D(tColor, gUv).rgb) - 0.48, 0.0) * sky;
+        sum += energy * weight;
+        wSumG += weight;
+        weight *= decay;
+      }
+      float shafts = (sum / wSumG) * exp(-distSun * 1.15);
+      float fg = smoothstep(0.90, 0.9985, centerDepth);
+      shafts *= mix(0.18, 1.0, fg);
+      color += vec3(1.05, 0.93, 0.72) * shafts * uGodRays * uSunOn;
+    }
+
     // Fine IGN grain so the HDR grade doesn't look plastic
     float g = ign(gl_FragCoord.xy + vec2(uFrameJitter * 19.0, uFrameJitter * 7.0)) - 0.5;
     color += g * 0.018 * uFxStrength;
@@ -229,6 +262,9 @@ export class VelocityMotionBlur {
   private dprCap = 2;
   private fxStrength = 1;
   private punch = 0;
+  private godRays = 1;
+  private godSamples = 12;
+  private sunNdc = new THREE.Vector3();
 
   constructor(private renderer: THREE.WebGLRenderer) {
     const size = this.getBufferSize();
@@ -248,6 +284,10 @@ export class VelocityMotionBlur {
         uSampleCount: { value: 12 },
         uFxStrength: { value: 1.0 },
         uPunch: { value: 0.0 },
+        uSunUV: { value: new THREE.Vector2(0.5, 0.7) },
+        uSunOn: { value: 0.0 },
+        uGodRays: { value: 1.0 },
+        uGodSamples: { value: 12 },
       },
       depthTest: false,
       depthWrite: false,
@@ -275,16 +315,22 @@ export class VelocityMotionBlur {
       this.sampleCount = 6;
       this.dprCap = 1;
       this.fxStrength = 0.42;
+      this.godRays = 0.35;
+      this.godSamples = 6;
     } else if (graphics === 'medium') {
       this.renderScale = 0.88;
       this.sampleCount = 8;
       this.dprCap = 1.5;
       this.fxStrength = 0.78;
+      this.godRays = 0.72;
+      this.godSamples = 8;
     } else {
       this.renderScale = 1;
       this.sampleCount = 12;
       this.dprCap = 2;
       this.fxStrength = 1;
+      this.godRays = 1;
+      this.godSamples = 12;
     }
     this.resize();
   }
@@ -333,6 +379,21 @@ export class VelocityMotionBlur {
   resetVelocity(): void {
     this.smoothVel.set(0, 0, 0);
     this.punch = 0;
+  }
+
+  setSun(camera: THREE.PerspectiveCamera, sunDir: THREE.Vector3): void {
+    this.sunNdc.copy(sunDir).multiplyScalar(900).add(camera.position).project(camera);
+    const uvx = this.sunNdc.x * 0.5 + 0.5;
+    const uvy = this.sunNdc.y * 0.5 + 0.5;
+    this.material.uniforms.uSunUV.value.set(uvx, uvy);
+    let on = 0;
+    if (this.sunNdc.z < 1) {
+      const ox = Math.max(0, Math.abs(uvx - 0.5) - 0.58);
+      const oy = Math.max(0, Math.abs(uvy - 0.5) - 0.58);
+      on = Math.max(0, 1 - (ox + oy) * 2.8);
+      on *= THREE.MathUtils.smoothstep(sunDir.y, -0.04, 0.18);
+    }
+    this.material.uniforms.uSunOn.value = on;
   }
 
   render(
@@ -405,6 +466,8 @@ export class VelocityMotionBlur {
     const punchTarget = smoothstep(10.0, 22.0, speed);
     this.punch += (punchTarget - this.punch) * Math.min(1, 7 * dt);
     this.material.uniforms.uPunch.value = this.punch;
+    this.material.uniforms.uGodRays.value = this.godRays * this.fxStrength;
+    this.material.uniforms.uGodSamples.value = this.godSamples;
 
     // Pass 1: Render 3D world to HDR + Depth target
     this.renderer.setRenderTarget(this.target);
