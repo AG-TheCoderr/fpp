@@ -138,12 +138,9 @@ export function saveSettings(settings: Settings): void {
 export function loadAllRecords(): Record<string, CourseRecord> {
   try {
     const raw = localStorage.getItem(recordsKey());
-    if (!raw) return {};
+    if (!raw || raw.length > 2_000_000) return {};
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object') {
-      return parsed as Record<string, CourseRecord>;
-    }
-    return {};
+    return sanitizeRecords(parsed);
   } catch {
     return {};
   }
@@ -158,7 +155,7 @@ export function saveCourseRecord(courseId: string, record: CourseRecord): void {
   try {
     const all = loadAllRecords();
     all[courseId] = record;
-    localStorage.setItem(RECORDS_KEY, JSON.stringify(all));
+    localStorage.setItem(recordsKey(), JSON.stringify(all));
   } catch {
     // Ignore storage failure
   }
@@ -215,6 +212,38 @@ export function decodeGhost(data: number[]): GhostFrame[] {
     });
   }
   return frames;
+}
+
+function sanitizeRecords(parsed: unknown): Record<string, CourseRecord> {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const out: Record<string, CourseRecord> = {};
+  const src = parsed as Record<string, unknown>;
+  const keys = Object.keys(src).slice(0, 64);
+  for (const id of keys) {
+    if (!/^[a-z0-9_-]{1,32}$/i.test(id)) continue;
+    const rec = src[id];
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
+    const r = rec as Record<string, unknown>;
+    const bestTime = Number(r.bestTime);
+    const peakSpeed = Number(r.peakSpeed);
+    const rank = r.rank;
+    if (!Number.isFinite(bestTime) || bestTime < 0 || bestTime > 3600) continue;
+    if (rank !== 'S' && rank !== 'A' && rank !== 'B' && rank !== 'C') continue;
+    const splits = Array.isArray(r.splits)
+      ? r.splits.map((n) => Number(n)).filter((n) => Number.isFinite(n)).slice(0, 16)
+      : [];
+    const ghost = Array.isArray(r.ghost)
+      ? r.ghost.map((n) => Number(n)).filter((n) => Number.isFinite(n)).slice(0, 12_000)
+      : [];
+    out[id] = {
+      bestTime,
+      rank,
+      peakSpeed: Number.isFinite(peakSpeed) ? Math.max(0, Math.min(80, peakSpeed)) : 0,
+      splits,
+      ghost,
+    };
+  }
+  return out;
 }
 
 function clamp(v: number, lo: number, hi: number): number {

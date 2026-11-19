@@ -1,5 +1,5 @@
-/* Network-first so GitHub Pages deploys actually reach players. */
-const CACHE = 'stride-pwa-v3';
+/* Network-first. Same-origin GET only — don't touch other hosts or cache junk. */
+const CACHE = 'stride-pwa-v4';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -18,10 +18,19 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
+  let url;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return;
+  }
+  if (url.origin !== self.location.origin) return;
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+
   event.respondWith(
     fetch(req)
       .then((res) => {
-        if (res.ok && req.url.startsWith(self.location.origin)) {
+        if (res.ok && res.type === 'basic') {
           const copy = res.clone();
           caches.open(CACHE).then((cache) => cache.put(req, copy));
         }
