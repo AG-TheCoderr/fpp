@@ -45,7 +45,9 @@ export function registerServiceWorker(): void {
       .then((regs) => Promise.all(regs.map((r) => r.unregister())))
       .then(() => (window.caches ? caches.keys() : Promise.resolve([])))
       .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
-      .then(() => navigator.serviceWorker.register('./sw.js'))
+      .then(() =>
+        navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+      )
       .catch(() => undefined);
   };
   if (document.readyState === 'complete') ready();
