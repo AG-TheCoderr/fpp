@@ -696,6 +696,7 @@ class StrideGame {
     }
 
     // Render world with per-pixel depth-reconstructed velocity motion blur
+    this.motionBlur.setSun(this.camera, this.sunDir);
     this.motionBlur.render(
       this.scene,
       this.camera,
