@@ -523,6 +523,41 @@ export class GameUI {
             <span class="setting-label">FPS</span>
             <button class="toggle-btn ${s.showFps ? 'is-on' : ''}" id="s-fps">${s.showFps ? 'ON' : 'OFF'}</button>
           </div>
+          <div class="setting-row">
+            <span class="setting-label">PAD SIZE</span>
+            <input class="setting-slider" id="s-tsize" type="range" min="70" max="150" step="5" value="${Math.round(s.touchSize * 100)}" />
+            <span class="setting-val" id="v-tsize">${Math.round(s.touchSize * 100)}%</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">PAD FADE</span>
+            <input class="setting-slider" id="s-topac" type="range" min="20" max="100" step="5" value="${Math.round(s.touchOpacity * 100)}" />
+            <span class="setting-val" id="v-topac">${Math.round(s.touchOpacity * 100)}%</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">STICK LEFT</span>
+            <input class="setting-slider" id="s-sx" type="range" min="0" max="28" step="1" value="${s.stickX}" />
+            <span class="setting-val" id="v-sx">${Math.round(s.stickX)}</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">STICK UP</span>
+            <input class="setting-slider" id="s-sy" type="range" min="0" max="40" step="1" value="${s.stickY}" />
+            <span class="setting-val" id="v-sy">${Math.round(s.stickY)}</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">JUMP IN</span>
+            <input class="setting-slider" id="s-ax" type="range" min="0" max="28" step="1" value="${s.actionsX}" />
+            <span class="setting-val" id="v-ax">${Math.round(s.actionsX)}</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">JUMP UP</span>
+            <input class="setting-slider" id="s-ay" type="range" min="0" max="40" step="1" value="${s.actionsY}" />
+            <span class="setting-val" id="v-ay">${Math.round(s.actionsY)}</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">PAUSE DOWN</span>
+            <input class="setting-slider" id="s-sys" type="range" min="0" max="80" step="1" value="${s.sysY}" />
+            <span class="setting-val" id="v-sys">${Math.round(s.sysY)}</span>
+          </div>
           <button class="danger-btn" id="s-clear">RESET TIMES</button>
         </div>
         <button class="menu-btn is-back" data-act="back">BACK</button>
@@ -593,6 +628,28 @@ export class GameUI {
       this.cb.onUiSound();
       this.cb.onSettingsChange(s);
     });
+
+    const bindPct = (
+      id: string,
+      apply: (n: number) => void,
+      label: (n: number) => string
+    ) => {
+      const el = this.root.querySelector<HTMLInputElement>(id)!;
+      const val = this.root.querySelector<HTMLElement>(id.replace('#s-', '#v-'))!;
+      el.addEventListener('input', () => {
+        const n = Number(el.value);
+        apply(n);
+        val.textContent = label(n);
+        this.cb.onSettingsChange(s);
+      });
+    };
+    bindPct('#s-tsize', (n) => { s.touchSize = n / 100; }, (n) => `${n}%`);
+    bindPct('#s-topac', (n) => { s.touchOpacity = n / 100; }, (n) => `${n}%`);
+    bindPct('#s-sx', (n) => { s.stickX = n; }, (n) => `${n}`);
+    bindPct('#s-sy', (n) => { s.stickY = n; }, (n) => `${n}`);
+    bindPct('#s-ax', (n) => { s.actionsX = n; }, (n) => `${n}`);
+    bindPct('#s-ay', (n) => { s.actionsY = n; }, (n) => `${n}`);
+    bindPct('#s-sys', (n) => { s.sysY = n; }, (n) => `${n}`);
 
     const fpsBtn = this.root.querySelector<HTMLButtonElement>('#s-fps')!;
     fpsBtn.addEventListener('click', () => {

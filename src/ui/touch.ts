@@ -29,6 +29,8 @@ export class TouchControls {
   private stickKnob: HTMLElement;
   private lookPad: HTMLElement;
   private lookCursor: HTMLElement;
+  private movePad: HTMLElement;
+  private stickRadius = 56;
 
   private stickId: number | null = null;
   private lookId: number | null = null;
@@ -58,6 +60,7 @@ export class TouchControls {
     this.root.className = 'touch-hud';
     this.root.hidden = true;
     this.root.innerHTML = `
+      <div class="touch-move" id="touch-move"></div>
       <div class="touch-look" id="touch-look">
         <div class="touch-look-frame">
           <span class="tl-slash"></span>
@@ -107,10 +110,23 @@ export class TouchControls {
     this.stickKnob = this.root.querySelector('#touch-knob')!;
     this.lookPad = this.root.querySelector('#touch-look')!;
     this.lookCursor = this.root.querySelector('#touch-look-cur')!;
+    this.movePad = this.root.querySelector('#touch-move')!;
 
     if (!this.enabled) return;
     document.documentElement.classList.add('is-touch');
     this.bind();
+  }
+
+  applyLayout(s: Settings): void {
+    const r = this.root;
+    r.style.setProperty('--touch-size', String(s.touchSize));
+    r.style.setProperty('--touch-alpha', String(s.touchOpacity));
+    r.style.setProperty('--stick-x', `${s.stickX}%`);
+    r.style.setProperty('--stick-y', `${s.stickY}%`);
+    r.style.setProperty('--act-x', `${s.actionsX}%`);
+    r.style.setProperty('--act-y', `${s.actionsY}%`);
+    r.style.setProperty('--sys-y', `${s.sysY}%`);
+    this.stickRadius = 48 + s.touchSize * 22;
   }
 
   setActive(active: boolean): void {
@@ -166,6 +182,7 @@ export class TouchControls {
   }
 
   private bind(): void {
+    this.movePad.addEventListener('pointerdown', (e) => this.onStickDown(e), { passive: false });
     this.stickBase.addEventListener('pointerdown', (e) => this.onStickDown(e), { passive: false });
     this.lookPad.addEventListener('pointerdown', (e) => this.onLookDown(e), { passive: false });
     window.addEventListener('pointermove', (e) => this.onMove(e), { passive: false });
@@ -217,10 +234,14 @@ export class TouchControls {
     if (this.stickId !== null) return;
     e.preventDefault();
     this.stickId = e.pointerId;
+    this.stickOriginX = e.clientX;
+    this.stickOriginY = e.clientY;
     this.stickBase.classList.add('is-live');
-    const r = this.stickBase.getBoundingClientRect();
-    this.stickOriginX = r.left + r.width * 0.5;
-    this.stickOriginY = r.top + r.height * 0.5;
+    const half = this.stickBase.offsetWidth * 0.5;
+    this.stickBase.style.left = `${e.clientX - half}px`;
+    this.stickBase.style.top = `${e.clientY - half}px`;
+    this.stickBase.style.bottom = 'auto';
+    this.stickBase.style.right = 'auto';
     this.updateStick(e.clientX, e.clientY);
   }
 
@@ -260,6 +281,10 @@ export class TouchControls {
       this.stickY = 0;
       this.stickBase.classList.remove('is-live');
       this.stickKnob.style.transform = 'translate(-50%, -50%)';
+      this.stickBase.style.left = '';
+      this.stickBase.style.top = '';
+      this.stickBase.style.bottom = '';
+      this.stickBase.style.right = '';
     }
     if (e.pointerId === this.lookId) {
       this.lookId = null;
@@ -274,7 +299,7 @@ export class TouchControls {
   }
 
   private updateStick(x: number, y: number): void {
-    const max = 48;
+    const max = this.stickRadius;
     let dx = x - this.stickOriginX;
     let dy = y - this.stickOriginY;
     const mag = Math.hypot(dx, dy);

@@ -162,6 +162,7 @@ class StrideGame {
         }
       },
     });
+    this.input.touch.applyLayout(this.settings);
 
     this.ui = new GameUI(uiRoot, COURSES, this.settings, {
       onPlayCourse: (idx) => this.startCourse(idx),
@@ -177,6 +178,7 @@ class StrideGame {
         saveSettings(this.settings);
         this.audio.setVolume(this.settings.volume);
         this.applyGraphics(this.settings.graphics);
+        this.input.touch.applyLayout(this.settings);
       },
       onRecordsCleared: () => {
         this.currentRecord = null;

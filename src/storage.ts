@@ -21,6 +21,13 @@ export const DEFAULT_SETTINGS: Settings = {
   foliage: 'high',
   showGhost: true,
   showFps: false,
+  touchSize: 1,
+  touchOpacity: 0.78,
+  stickX: 4,
+  stickY: 8,
+  actionsX: 3,
+  actionsY: 6,
+  sysY: 3,
 };
 
 export function computeRank(time: number, ranks: RankTimes): Rank {
@@ -63,6 +70,13 @@ export function loadSettings(): Settings {
       foliage: isFoliageDensity(parsed.foliage) ? parsed.foliage : 'high',
       showGhost: typeof parsed.showGhost === 'boolean' ? parsed.showGhost : true,
       showFps: typeof parsed.showFps === 'boolean' ? parsed.showFps : false,
+      touchSize: clamp(Number(parsed.touchSize ?? DEFAULT_SETTINGS.touchSize), 0.7, 1.5),
+      touchOpacity: clamp(Number(parsed.touchOpacity ?? DEFAULT_SETTINGS.touchOpacity), 0.2, 1),
+      stickX: clamp(Number(parsed.stickX ?? DEFAULT_SETTINGS.stickX), 0, 28),
+      stickY: clamp(Number(parsed.stickY ?? DEFAULT_SETTINGS.stickY), 0, 40),
+      actionsX: clamp(Number(parsed.actionsX ?? DEFAULT_SETTINGS.actionsX), 0, 28),
+      actionsY: clamp(Number(parsed.actionsY ?? DEFAULT_SETTINGS.actionsY), 0, 40),
+      sysY: clamp(Number(parsed.sysY ?? DEFAULT_SETTINGS.sysY), 0, 80),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
