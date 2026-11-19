@@ -764,8 +764,8 @@ export class PhysicsWorld {
     lookZ: number,
     excludeId: string | null = null
   ): { anchor: GrappleDef; dist: number } | null {
-    const minT = 4.2;
-    const maxT = 56;
+    const minT = 5.0;
+    const maxT = 48;
     let bestT = maxT + 1;
     let hitX = 0;
     let hitY = 0;
@@ -773,17 +773,32 @@ export class PhysicsWorld {
 
     for (let i = 0; i < this.swingVolumes.length; i++) {
       const v = this.swingVolumes[i];
+      // Never web a roof under your feet — pendulum needs a point *above* you
+      if (v.maxY < eyeY + 1.4) continue;
       const t = rayAabb(eyeX, eyeY, eyeZ, lookX, lookY, lookZ, v, minT, maxT);
       if (t === null || t >= bestT) continue;
-      const hx = eyeX + lookX * t;
-      const hy = eyeY + lookY * t;
-      const hz = eyeZ + lookZ * t;
+
+      // Aim the lip under the crosshair: intersect the roof plane, clamp to the deck
+      let px: number;
+      let pz: number;
+      if (Math.abs(lookY) > 0.02) {
+        const tTop = (v.maxY - eyeY) / lookY;
+        if (tTop > 0.5 && tTop < maxT) {
+          px = eyeX + lookX * tTop;
+          pz = eyeZ + lookZ * tTop;
+        } else {
+          px = eyeX + lookX * t;
+          pz = eyeZ + lookZ * t;
+        }
+      } else {
+        px = eyeX + lookX * t;
+        pz = eyeZ + lookZ * t;
+      }
+
       bestT = t;
-      // Side-wall hits snap to the cornice so the rope always hangs from a roof lip
-      const onTop = hy >= v.maxY - 0.45;
-      hitX = Math.max(v.minX + 0.4, Math.min(v.maxX - 0.4, hx));
-      hitZ = Math.max(v.minZ + 0.4, Math.min(v.maxZ - 0.4, hz));
-      hitY = onTop ? v.maxY + 0.12 : v.maxY + 0.18;
+      hitX = Math.max(v.minX + 0.35, Math.min(v.maxX - 0.35, px));
+      hitZ = Math.max(v.minZ + 0.35, Math.min(v.maxZ - 0.35, pz));
+      hitY = v.maxY + 0.2;
     }
 
     if (bestT <= maxT) {
