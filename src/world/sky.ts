@@ -38,7 +38,8 @@ export class SkySystem {
     this.skyMesh.renderOrder = -1000;
     this.group.add(this.skyMesh);
 
-    const url = `${import.meta.env.BASE_URL}sky/day-pano.jpg`;
+    const base = import.meta.env.BASE_URL || './';
+    const url = `${base}sky/day-pano.jpg`;
     new THREE.TextureLoader().load(url, (tex) => {
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
