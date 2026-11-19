@@ -40,7 +40,13 @@ export function requestAppFullscreen(): void {
 export function registerServiceWorker(): void {
   if (!('serviceWorker' in navigator)) return;
   const ready = () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => undefined);
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => Promise.all(regs.map((r) => r.unregister())))
+      .then(() => (window.caches ? caches.keys() : Promise.resolve([])))
+      .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+      .then(() => navigator.serviceWorker.register('./sw.js'))
+      .catch(() => undefined);
   };
   if (document.readyState === 'complete') ready();
   else window.addEventListener('load', ready, { once: true });

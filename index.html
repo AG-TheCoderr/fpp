@@ -31,9 +31,29 @@
     <div id="app">
       <canvas id="game-canvas"></canvas>
       <canvas id="fx-canvas"></canvas>
-      <div id="ui-root"></div>
+      <div id="ui-root">
+        <div class="menu-screen" id="boot-menu">
+          <div class="brand">
+            <span class="brand-slash"></span>
+            <h1 class="brand-title">STRIDE</h1>
+          </div>
+          <p class="boot-msg">LOADING</p>
+        </div>
+      </div>
       <div id="touch-root"></div>
     </div>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          regs.forEach(function (r) { r.unregister(); });
+        });
+      }
+      if (window.caches) {
+        caches.keys().then(function (keys) {
+          keys.forEach(function (k) { caches.delete(k); });
+        });
+      }
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

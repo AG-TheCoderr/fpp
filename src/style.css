@@ -47,14 +47,31 @@ body,
 
 #game-canvas {
   display: block;
+  z-index: 0;
 }
 
 #fx-canvas {
   pointer-events: none;
+  z-index: 1;
 }
 
 #ui-root {
   pointer-events: none;
+  z-index: 20;
+}
+
+#ui-root:has(.menu-screen),
+#ui-root:has(.finish-screen) {
+  pointer-events: auto;
+}
+
+.boot-msg {
+  margin-top: 18px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.28em;
+  color: rgba(255, 255, 255, 0.7);
 }
 
 /* =========================================================================
