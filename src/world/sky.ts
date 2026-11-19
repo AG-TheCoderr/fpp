@@ -59,14 +59,15 @@ export class SkySystem {
       mapped.colorSpace = THREE.SRGBColorSpace;
       mapped.needsUpdate = true;
 
-      const pmrem = new THREE.PMREMGenerator(this.renderer);
-      pmrem.compileEquirectangularShader();
-      const env = pmrem.fromEquirectangular(mapped).texture;
-      this.scene.environment = env;
-      if ('environmentIntensity' in this.scene) {
-        (this.scene as THREE.Scene & { environmentIntensity: number }).environmentIntensity = 0.5;
+      try {
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        pmrem.compileEquirectangularShader();
+        const env = pmrem.fromEquirectangular(mapped).texture;
+        this.scene.environment = env;
+        pmrem.dispose();
+      } catch {
+        /* env map is optional */
       }
-      pmrem.dispose();
 
       this.alignSun();
     });

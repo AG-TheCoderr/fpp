@@ -6,7 +6,7 @@ import {
   loadAllRecords,
 } from '../storage';
 import { Player } from '../game/player';
-import { isStandaloneDisplay, requestAppFullscreen } from './display';
+import { requestAppFullscreen } from './display';
 import {
   CourseDef,
   GameScreen,
@@ -335,7 +335,6 @@ export class GameUI {
       return;
     }
 
-    const needsEnter = !isStandaloneDisplay();
     this.root.innerHTML = `
       <div class="menu-screen">
         <div class="brand">
@@ -348,32 +347,8 @@ export class GameUI {
           <button class="menu-btn" data-act="controls">CONTROLS</button>
           <button class="menu-btn" data-act="settings">SETTINGS</button>
         </nav>
-        ${
-          needsEnter
-            ? `<button type="button" class="enter-full" id="enter-full">
-                <span class="enter-slash"></span>
-                <span class="enter-kicker">ENTER</span>
-                <span class="enter-title">FULL SCREEN</span>
-                <span class="enter-hint">TAP ANYWHERE</span>
-              </button>`
-            : ''
-        }
       </div>
     `;
-
-    const enterBtn = this.root.querySelector<HTMLButtonElement>('#enter-full');
-    if (enterBtn) {
-      const dismiss = () => {
-        requestAppFullscreen();
-        this.cb.onUiSound(true);
-        enterBtn.classList.add('is-out');
-        window.setTimeout(() => enterBtn.remove(), 220);
-      };
-      enterBtn.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        dismiss();
-      });
-    }
 
     this.bindMenuButtons({
       play: () => {

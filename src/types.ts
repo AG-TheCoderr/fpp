@@ -36,6 +36,8 @@ export interface BoxDef {
   noCollide?: boolean;
   /** Disable automatic rooftop edge props on this rooftop */
   cleanRoof?: boolean;
+  /** Skip skyscraper shaft / pilasters (lightweight off-track playground roofs). */
+  noShaft?: boolean;
   /** Optional direction of painted runner guide strip on top */
   guideDir?: RampDir;
   /** Optional stencil code painted on roof/wall */

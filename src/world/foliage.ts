@@ -598,7 +598,7 @@ export class CourseFoliage {
 
     // 1. Populate playable rooftops along safe outer lateral margins (zero parkour interference!)
     for (const b of course.boxes) {
-      if (b.style !== 'rooftop') continue;
+      if (b.style !== 'rooftop' || b.noShaft) continue;
       const topY = b.y + b.h;
 
       if (!b.noCollide && !b.cleanRoof && b.w >= 14 && b.d >= 16) {
