@@ -199,33 +199,38 @@ const BLUR_FRAG = /* glsl */ `
     float vig = smoothstep(0.15, 1.05, radial);
     color *= 1.0 - vig * (0.22 + uPunch * 0.18) * uFxStrength;
 
-    // Crepuscular shafts: Sousa radial blur of sky luminance toward the projected sun
+    // Soft dispersed shafts: fewer radial taps, perpendicular dither, haze not needles
     if (uGodRays > 0.01 && uSunOn > 0.01) {
       vec2 toSun = uSunUV - vUv;
       float distSun = length(toSun);
-      float jitterG = ign(gl_FragCoord.xy + vec2(uFrameJitter * 41.0, 11.0));
-      int GN = int(uGodSamples + 0.5);
-      float decay = 0.91;
-      float weight = 1.0;
-      float sum = 0.0;
-      float wSumG = 0.001;
-      vec2 stepUv = toSun * (0.92 / max(float(GN), 1.0));
-      vec2 gUv = vUv - stepUv * jitterG * 0.35;
-      for (int gi = 0; gi < 12; gi++) {
-        if (gi >= GN) break;
-        gUv += stepUv;
-        if (gUv.x < 0.0 || gUv.x > 1.0 || gUv.y < 0.0 || gUv.y > 1.0) break;
-        float gd = texture2D(tDepth, gUv).r;
-        float sky = smoothstep(0.9965, 0.9996, gd);
-        float energy = max(luma(texture2D(tColor, gUv).rgb) - 0.48, 0.0) * sky;
-        sum += energy * weight;
-        wSumG += weight;
-        weight *= decay;
+      if (distSun < 0.82) {
+        float jitterG = ign(gl_FragCoord.xy + vec2(uFrameJitter * 41.0, 11.0));
+        int GN = int(uGodSamples + 0.5);
+        float decay = 0.78;
+        float weight = 1.0;
+        float sum = 0.0;
+        float wSumG = 0.001;
+        vec2 stepUv = toSun * (1.15 / max(float(GN), 1.0));
+        vec2 perp = vec2(-stepUv.y, stepUv.x);
+        vec2 gUv = vUv + perp * (jitterG - 0.5) * 0.85;
+        for (int gi = 0; gi < 8; gi++) {
+          if (gi >= GN) break;
+          gUv += stepUv;
+          if (gUv.x < 0.0 || gUv.x > 1.0 || gUv.y < 0.0 || gUv.y > 1.0) break;
+          float gd = texture2D(tDepth, gUv).r;
+          float sky = smoothstep(0.993, 0.9994, gd);
+          if (sky > 0.04) {
+            float energy = max(luma(texture2D(tColor, gUv).rgb) - 0.42, 0.0) * sky;
+            sum += energy * weight;
+          }
+          wSumG += weight;
+          weight *= decay;
+        }
+        float shafts = pow(max(sum / wSumG, 0.0), 0.68) * exp(-distSun * 0.52);
+        float fg = smoothstep(0.88, 0.998, centerDepth);
+        shafts *= mix(0.12, 1.0, fg);
+        color += vec3(1.02, 0.94, 0.78) * shafts * (0.72 * uGodRays * uSunOn);
       }
-      float shafts = (sum / wSumG) * exp(-distSun * 1.15);
-      float fg = smoothstep(0.90, 0.9985, centerDepth);
-      shafts *= mix(0.18, 1.0, fg);
-      color += vec3(1.05, 0.93, 0.72) * shafts * uGodRays * uSunOn;
     }
 
     // Fine IGN grain so the HDR grade doesn't look plastic
@@ -315,22 +320,22 @@ export class VelocityMotionBlur {
       this.sampleCount = 6;
       this.dprCap = 1;
       this.fxStrength = 0.42;
-      this.godRays = 0.35;
-      this.godSamples = 6;
+      this.godRays = 0.28;
+      this.godSamples = 4;
     } else if (graphics === 'medium') {
       this.renderScale = 0.88;
       this.sampleCount = 8;
       this.dprCap = 1.5;
       this.fxStrength = 0.78;
-      this.godRays = 0.72;
-      this.godSamples = 8;
+      this.godRays = 0.55;
+      this.godSamples = 6;
     } else {
       this.renderScale = 1;
       this.sampleCount = 12;
       this.dprCap = 2;
       this.fxStrength = 1;
-      this.godRays = 1;
-      this.godSamples = 12;
+      this.godRays = 0.82;
+      this.godSamples = 8;
     }
     this.resize();
   }
