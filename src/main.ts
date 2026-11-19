@@ -467,6 +467,25 @@ class StrideGame {
     });
   }
 
+  private pushAudioListener(active: boolean): void {
+    const e = this.camera.matrixWorld.elements;
+    this.audio.updateListener(
+      this.camera.position.x,
+      this.camera.position.y,
+      this.camera.position.z,
+      -e[8],
+      -e[9],
+      -e[10],
+      e[4],
+      e[5],
+      e[6],
+      this.sunDir.x,
+      this.sunDir.y,
+      this.sunDir.z,
+      active
+    );
+  }
+
   private nextCourse(): void {
     this.startCourse((this.courseIndex + 1) % COURSES.length);
   }
@@ -694,6 +713,7 @@ class StrideGame {
       this.fx.update(dt, 0, this.camera.position, false);
     }
 
+    this.pushAudioListener(this.screen === 'playing');
     this.sky.update(dt, this.camera.position, this.settings.graphics !== 'low');
     this.updateShadowFrustum();
 
